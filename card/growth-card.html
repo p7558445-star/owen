@@ -8,8 +8,10 @@
     --paper:#FFFDF8;
     --ink:#2F3A4A;         /* 鋼筆藍黑 */
     --ink-soft:#5E6B7C;
+    --rose:#C8645B;
     --tape-pink:#F2A7A0;
     --tape-yellow:#F3D57A;
+    --tape-blue:#A9C4E4;   /* 繡球花藍 */
     --leaf:#6F9C7E;
     --rule:#C9D5CC;
     --hand:"Iansui","LXGW WenKai TC","Kaiti TC","BiauKai","STKaiti",serif;
@@ -29,50 +31,67 @@
   .btn:hover{background:var(--tape-yellow)}
   .btn.primary{background:var(--ink);color:var(--paper)}
   .btn.primary:hover{background:#44536a}
-  .btn:focus-visible,[contenteditable]:focus-visible,.photo:focus-visible,.chip:focus-visible{outline:2px dashed var(--leaf);outline-offset:3px}
   .btn.warn{border-color:#B5524A;color:#B5524A}
+  .btn:focus-visible,[contenteditable]:focus-visible,.photo:focus-visible,.chip:focus-visible{outline:2px dashed var(--leaf);outline-offset:3px}
 
-  /* cover */
-  .cover{position:relative;background:var(--paper);padding:48px 28px 40px;margin-top:8px;text-align:center;
-    box-shadow:0 1px 0 rgba(0,0,0,.04),0 12px 30px -18px rgba(47,58,74,.45)}
-  .cover::before,.cover::after{content:"";position:absolute;top:-10px;width:90px;height:24px;background:var(--tape-pink);opacity:.85}
-  .cover::before{left:24px;transform:rotate(-6deg)}
-  .cover::after{right:24px;transform:rotate(5deg);background:var(--tape-yellow)}
-  .eyebrow{font-family:var(--ui);font-size:12px;letter-spacing:.25em;color:var(--leaf)}
-  .cover h1{font-family:var(--hand);font-weight:400;font-size:clamp(34px,8vw,56px);line-height:1.2;margin:14px 0 6px;text-wrap:balance}
-  .cover h1 .name{color:#C8645B}
-  .cover .sub{font-size:18px;color:var(--ink-soft);margin:0}
-  .sprig{display:block;margin:18px auto 0;width:120px;height:40px}
-
-  /* timeline with height ruler */
-  .timeline{position:relative;margin-top:36px;padding-left:56px}
-  .ruler{position:absolute;left:0;top:0;bottom:0;width:40px;background:
-     repeating-linear-gradient(to bottom,var(--ink-soft) 0 1.5px,transparent 1.5px 60px) right/18px 100% no-repeat,
-     repeating-linear-gradient(to bottom,var(--rule) 0 1px,transparent 1px 12px) right/9px 100% no-repeat;
-     border-right:2px solid var(--ink-soft)}
-  .ruler span{position:absolute;right:22px;font-family:var(--ui);font-size:10px;color:var(--ink-soft);transform:translateY(-50%)}
-  .step{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:24px;align-items:center;margin-bottom:44px}
-  .step:nth-child(even) .polaroid{order:2;transform:rotate(2.5deg)}
-  .step::before{content:"";position:absolute;left:-26px;top:50%;width:14px;height:14px;border-radius:50%;background:var(--leaf);border:3px solid var(--paper);transform:translate(-50%,-50%);box-shadow:0 0 0 1.5px var(--leaf)}
-  .polaroid{position:relative;background:var(--paper);padding:12px 12px 14px;transform:rotate(-2.5deg);box-shadow:0 10px 24px -14px rgba(47,58,74,.55)}
+  /* shared polaroid */
+  .polaroid{position:relative;margin:0;background:var(--paper);padding:12px 12px 14px;transform:rotate(-2.5deg);box-shadow:0 10px 24px -14px rgba(47,58,74,.55)}
   .polaroid::before{content:"";position:absolute;top:-11px;left:50%;width:72px;height:22px;transform:translateX(-50%) rotate(-3deg);background:var(--tape-yellow);opacity:.85}
-  .step:nth-child(3n) .polaroid::before{background:var(--tape-pink)}
   .photo{display:block;width:100%;max-width:100%;aspect-ratio:4/5;border:0;padding:0;background:#EEF1EC;cursor:pointer;overflow:hidden;position:relative}
   .photo img{position:absolute;inset:0;z-index:1;width:100%;height:100%;object-fit:cover;display:block}
   .photo .ph{position:absolute;inset:0;display:grid;place-content:center;gap:6px;color:var(--ink-soft);font-family:var(--ui);font-size:13px;text-align:center;
     background:repeating-linear-gradient(45deg,transparent 0 10px,rgba(111,156,126,.08) 10px 20px)}
   .photo .ph svg{margin:0 auto}
-  .polaroid .measure{font-family:var(--hand);font-size:18px;text-align:center;margin-top:8px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+  .polaroid figcaption{font-family:var(--hand);font-size:18px;text-align:center;margin-top:8px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+  .eyebrow{font-family:var(--ui);font-size:12px;letter-spacing:.25em;color:var(--leaf)}
+
+  /* cover */
+  .cover{position:relative;background:var(--paper);padding:44px 28px 40px;margin-top:8px;text-align:center;
+    box-shadow:0 1px 0 rgba(0,0,0,.04),0 12px 30px -18px rgba(47,58,74,.45)}
+  .cover::before,.cover::after{content:"";position:absolute;top:-10px;width:90px;height:24px;background:var(--tape-blue);opacity:.9}
+  .cover::before{left:24px;transform:rotate(-6deg)}
+  .cover::after{right:24px;transform:rotate(5deg);background:var(--tape-pink)}
+  .cover h1{font-family:var(--hand);font-weight:400;font-size:clamp(34px,8vw,56px);line-height:1.2;margin:12px 0 6px;text-wrap:balance}
+  .cover h1 .name{color:var(--rose)}
+  .cover .sub{font-family:var(--hand);font-size:clamp(17px,4.6vw,22px);letter-spacing:.08em;text-wrap:balance;color:var(--ink);margin:0}
+  .cover .polaroid{max-width:520px;margin:28px auto 0;transform:rotate(-1.5deg)}
+  .cover .polaroid::before{background:var(--tape-blue)}
+  .cover .photo{aspect-ratio:4/3}
+
+  /* timeline with growth ruler */
+  .timeline{position:relative;margin-top:40px;padding-left:56px}
+  .ruler{position:absolute;left:0;top:0;bottom:0;width:40px;background:
+     repeating-linear-gradient(to bottom,var(--ink-soft) 0 1.5px,transparent 1.5px 60px) right/18px 100% no-repeat,
+     repeating-linear-gradient(to bottom,var(--rule) 0 1px,transparent 1px 12px) right/9px 100% no-repeat;
+     border-right:2px solid var(--ink-soft)}
+  .chapter{position:relative;margin:8px 0 34px}
+  .chapter::before{content:"";position:absolute;left:-26px;top:22px;width:22px;height:22px;border-radius:50%;background:var(--rose);border:4px solid var(--paper);transform:translate(-50%,-50%);box-shadow:0 0 0 1.5px var(--rose)}
+  .chapter .no{font-family:var(--ui);font-size:12px;letter-spacing:.25em;color:var(--rose)}
+  .chapter h2{font-family:var(--hand);font-weight:400;font-size:clamp(30px,6vw,40px);margin:2px 0 4px;line-height:1.2}
+  .chapter p{margin:0;font-size:17px;color:var(--ink-soft)}
+  .step{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:24px;align-items:center;margin-bottom:44px}
+  .step:nth-of-type(even) .polaroid{order:2;transform:rotate(2.5deg)}
+  .step:nth-of-type(3n) .polaroid::before{background:var(--tape-pink)}
+  .step::before{content:"";position:absolute;left:-26px;top:50%;width:14px;height:14px;border-radius:50%;background:var(--leaf);border:3px solid var(--paper);transform:translate(-50%,-50%);box-shadow:0 0 0 1.5px var(--leaf)}
   .txt .age{font-family:var(--ui);font-size:12px;letter-spacing:.2em;color:var(--leaf);display:inline-block}
-  .txt h2{font-family:var(--hand);font-weight:400;font-size:28px;margin:4px 0 10px;line-height:1.25}
+  .txt h3{font-family:var(--hand);font-weight:400;font-size:28px;margin:4px 0 10px;line-height:1.25}
   .txt p{font-size:17px;line-height:1.9;margin:0}
   .del{margin-top:10px;font-family:var(--ui);font-size:12px;background:none;border:0;color:#B5524A;cursor:pointer;padding:0;text-decoration:underline}
+  .addrow{text-align:center;margin:-16px 0 36px}
+
+  /* finale */
+  .finale{position:relative;background:var(--paper);padding:44px 28px 40px;text-align:center;margin-bottom:40px;
+    box-shadow:0 12px 30px -18px rgba(47,58,74,.45)}
+  .finale .polaroid{max-width:340px;margin:22px auto 26px;transform:rotate(1.5deg)}
+  .finale .polaroid::before{background:var(--tape-pink)}
+  .finale h2{font-family:var(--hand);font-weight:400;font-size:clamp(30px,7vw,46px);color:var(--rose);margin:0 0 10px;line-height:1.3;white-space:pre-line}
+  .finale p{font-size:18px;line-height:1.9;margin:0 auto;max-width:34em}
 
   /* letter */
-  .letter{position:relative;background:var(--paper);padding:40px 28px 36px;margin-top:12px;
+  .letter{position:relative;background:var(--paper);padding:40px 28px 36px;
     background-image:repeating-linear-gradient(to bottom,transparent 0 35px,var(--rule) 35px 36px);background-position:0 22px;
     box-shadow:0 12px 30px -18px rgba(47,58,74,.45)}
-  .letter::before{content:"";position:absolute;top:-10px;left:50%;width:100px;height:24px;background:var(--tape-pink);opacity:.85;transform:translateX(-50%) rotate(2deg)}
+  .letter::before{content:"";position:absolute;top:-10px;left:50%;width:100px;height:24px;background:var(--tape-blue);opacity:.9;transform:translateX(-50%) rotate(2deg)}
   .letter .dear{font-family:var(--hand);font-size:26px;margin:0 0 6px;line-height:36px}
   .letter .body{font-family:var(--hand);font-size:20px;line-height:36px;white-space:pre-wrap;min-height:180px}
   .letter .sign{font-family:var(--hand);font-size:22px;text-align:right;line-height:36px;margin-top:12px}
@@ -81,30 +100,30 @@
   .chips{display:flex;flex-wrap:wrap;gap:8px}
   .chip{font-family:var(--body);font-size:15px;border:1.5px dashed var(--leaf);background:transparent;color:var(--ink);border-radius:6px;padding:6px 10px;cursor:pointer;text-align:left}
   .chip:hover{background:#DCEADF}
-  .addrow{text-align:center;margin:-16px 0 36px}
 
   [contenteditable]{border-radius:4px;outline:none}
   body.edit [contenteditable]{box-shadow:inset 0 -1.5px 0 rgba(111,156,126,.55)}
   body.edit [contenteditable]:hover{background:rgba(243,213,122,.25)}
   body:not(.edit) .edit-only{display:none!important}
   body:not(.edit) .photo{cursor:default}
-  .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--paper);font-family:var(--ui);font-size:13px;padding:8px 16px;border-radius:999px}
+  .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:20;background:var(--ink);color:var(--paper);font-family:var(--ui);font-size:13px;padding:8px 16px;border-radius:999px}
 
   @media (max-width:560px){
     .timeline{padding-left:40px}
-    .ruler{width:26px}.ruler span{display:none}
-    .step::before{left:-20px}
+    .ruler{width:26px}
+    .step::before,.chapter::before{left:-20px}
     .step{grid-template-columns:1fr;gap:14px}
-    .step:nth-child(even) .polaroid{order:0}
-    .polaroid{max-width:300px;margin-inline:auto;width:100%}
+    .step:nth-of-type(even) .polaroid{order:0}
+    .step .polaroid{max-width:300px;margin-inline:auto;width:100%}
+    .cover,.finale,.letter{padding-inline:18px}
   }
-  @media (prefers-reduced-motion:no-preference){ .polaroid{transition:transform .3s} .polaroid:hover{transform:rotate(0) scale(1.02)} }
-  @media print{ .bar,.edit-only,.bank{display:none!important} body{background:#fff} .step,.letter{break-inside:avoid} }
+  @media (prefers-reduced-motion:no-preference){ .step .polaroid{transition:transform .3s} .step .polaroid:hover{transform:rotate(0) scale(1.02)} }
+  @media print{ .bar,.edit-only,.bank{display:none!important} body{background:#fff} .step,.letter,.finale,.chapter{break-inside:avoid} }
 </style>
 
 <div class="wrap">
-  <div class="bar edit-only-bar">
-    <span class="hint" id="hint">點文字直接修改，點相框放入照片。內容只存在這台裝置的瀏覽器裡。</span>
+  <div class="bar">
+    <span class="hint" id="hint"></span>
     <button class="btn edit-only" id="addBtn" type="button">＋ 新增一段</button>
     <button class="btn warn edit-only" id="resetBtn" type="button">重設範例</button>
     <button class="btn primary" id="modeBtn" type="button">預覽卡片</button>
@@ -114,14 +133,27 @@
     <div class="eyebrow" contenteditable="true" data-k="eyebrow"></div>
     <h1>給 <span class="name" contenteditable="true" data-k="name"></span> 的成長小書</h1>
     <p class="sub" contenteditable="true" data-k="sub"></p>
-    <svg class="sprig" viewBox="0 0 120 40" aria-hidden="true"><path d="M8 32 C40 30 70 20 112 8" fill="none" stroke="#6F9C7E" stroke-width="2" stroke-linecap="round"/><g fill="#6F9C7E"><ellipse cx="34" cy="24" rx="8" ry="4" transform="rotate(-30 34 24)"/><ellipse cx="42" cy="32" rx="8" ry="4" transform="rotate(20 42 32)"/><ellipse cx="64" cy="16" rx="8" ry="4" transform="rotate(-35 64 16)"/><ellipse cx="72" cy="25" rx="8" ry="4" transform="rotate(15 72 25)"/><ellipse cx="94" cy="8" rx="7" ry="3.5" transform="rotate(-40 94 8)"/></g><circle cx="112" cy="8" r="4" fill="#F2A7A0"/></svg>
+    <figure class="polaroid">
+      <button class="photo" type="button" data-id="cover" data-default="photos/09.jpg" aria-label="更換封面照片"></button>
+      <figcaption contenteditable="true" data-k="coverCap"></figcaption>
+    </figure>
   </section>
 
-  <section class="timeline" id="timeline" aria-label="成長歷程">
-    <div class="ruler" id="ruler" aria-hidden="true"></div>
+  <section class="timeline" aria-label="成長歷程">
+    <div class="ruler" aria-hidden="true"></div>
     <div id="steps"></div>
   </section>
   <div class="addrow edit-only"><button class="btn" id="addBtn2" type="button">＋ 在最後新增一段回憶</button></div>
+
+  <section class="finale">
+    <div class="eyebrow" contenteditable="true" data-k="finaleEyebrow"></div>
+    <figure class="polaroid">
+      <button class="photo" type="button" data-id="finale" data-default="photos/08.jpg" aria-label="更換最後一頁的照片"></button>
+      <figcaption contenteditable="true" data-k="finaleCap"></figcaption>
+    </figure>
+    <h2 contenteditable="true" data-k="finaleTitle"></h2>
+    <p contenteditable="true" data-k="finaleText"></p>
+  </section>
 
   <section class="letter">
     <p class="dear">親愛的 <span contenteditable="true" data-k="name2"></span>：</p>
@@ -139,42 +171,51 @@
 
 <script>
 (function(){
-  const LS='growthcard.dory.v2';
+  const LS='growthcard.dory.v3';
   const DEFAULT={
     eyebrow:'DORY · 2023 — 2025',
     name:'DORY', name2:'亦倢',
-    sub:'從舞台、畫紙到琴鍵，每一步都是你',
-    date:'2026 年 9 月 23 日', sign:'永遠愛你的 爸爸',
-    letter:'謝謝你來到我們家。\n這幾年，我看著你站上舞台跳舞、在畫紙上畫出自己的山和河、在大家面前彈鋼琴。我最驕傲的從來不是獎狀有幾張，而是你每一次願意上台、願意嘗試的勇氣。\n\n以後一定也會有跳錯、畫壞、彈錯音的時候，沒關係——那只代表你正在學新的東西。\n\n不管你想當小舞者、小畫家、小鋼琴家，還是任何樣子的自己，我們都會在台下，為你用力鼓掌。\n',
+    sub:'相信自己 · 肯定自己 · 戰勝自己',
+    coverCap:'2025.06.22 · 繡球花開的日子',
+    finaleEyebrow:'最後一頁',
+    finaleCap:'2025.05.31 · 公主之夜',
+    finaleTitle:'在爸媽心中，\n你永遠是最棒的',
+    finaleText:'穿上安娜公主的禮服、戴上小皇冠，你對著鏡頭比了一個讚。DORY，就像這個讚一樣——要記得常常為自己按讚。不管輸或贏、跳錯或彈錯，你永遠是我們心中最棒的公主。',
+    date:'2026 年 9 月 23 日', sign:'永遠愛你的 爸爸 & 媽媽',
+    letter:'這張卡片裡，是你這幾年最勇敢的樣子。\n\n你站上舞台的時候，是在「相信自己」——就算台下坐滿了人，你還是把舞跳完。\n你畫出自己的山和河的時候，是在「肯定自己」——你的顏色，不需要跟別人一樣。\n你一次又一次練琴、努力拿到獎狀的時候，是在「戰勝自己」——每一次，都比昨天的你再進步一點點。\n\n以後一定會遇到覺得自己不夠好的時候。那時候，請翻開這張卡片，看看照片裡那個勇敢的你。\n\n不管分數、不管輸贏，在爸爸媽媽心中，你永遠是最棒的。\n',
+    chapters:{
+      c1:{title:'相信自己',note:'敢站上去，就已經贏了一半。'},
+      c2:{title:'肯定自己',note:'你的畫、你的顏色，都值得被好好欣賞。'},
+      c3:{title:'戰勝自己',note:'真正的對手不是別人，而是昨天的自己。'}
+    },
     steps:[
-      {id:'d1',img:'photos/01.jpg',age:'2023 夏',title:'舞蹈教室裡的小舞者',measure:'2023.07.15',text:'穿上亮晶晶的表演服，踮起腳尖擺好姿勢。那時候的你，已經懂得為了喜歡的事認真練習。'},
-      {id:'d2',img:'photos/02.jpg',age:'2023 夏',title:'站上舞台',measure:'2023.08.05',text:'燈光亮起、台下坐滿了人，你還是跟著音樂把每個動作跳完。勇敢，就是這個樣子。'},
-      {id:'d3',img:'photos/03.jpg',age:'2024 春',title:'努力被看見了',measure:'2024.03.17',text:'胸前掛著獎牌、手上舉著獎狀。比起那張紙，我更記得你為它花了多少時間。'},
-      {id:'d4',img:'photos/04.jpg',age:'畫畫時光',title:'你畫的山和河',measure:'日期待補',text:'紫色的山、彎彎的河、小房子和大樹，還有撒上去的白色雲霧。你看世界的方式，總有自己的顏色。'},
-      {id:'d5',img:'photos/05.jpg',age:'2025 冬',title:'笑得最燦爛的 YA',measure:'2025.01.17',text:'又一張獎狀，你笑得眼睛都瞇起來了。努力之後的快樂，是誰都拿不走的。'},
-      {id:'d6',img:'photos/06.jpg',age:'2025 春',title:'DORY 的小畫展',measure:'2025.03.01',text:'牆上貼滿你的畫，你拿著小紅花站在中間——那幅山水畫也在上面喔！'},
-      {id:'d7',img:'photos/07.jpg',age:'鋼琴時光',title:'琴鍵前的專注',measure:'日期待補',text:'在大家面前彈琴需要很大的勇氣。你坐上去，一個音一個音，把曲子完整地彈完。'},
-      {id:'d8',img:'photos/08.jpg',age:'2025 夏',title:'公主之夜',measure:'2025.05.31',text:'穿上安娜公主的禮服、戴上小皇冠，還比了一個讚。做自己喜歡的樣子，就是最美的樣子。'},
-      {id:'d9',img:'photos/09.jpg',age:'2025 夏',title:'繡球花開的日子',measure:'2025.06.22',text:'滿山的繡球花裡，你靠著爸爸比 YA。最喜歡這樣的時光：什麼都不用做，只要和你在一起。'}
+      {id:'d1',ch:'c1',img:'photos/01.jpg',age:'舞蹈',title:'舞蹈教室裡的小舞者',measure:'2023.07.15',text:'穿上亮晶晶的表演服，擺出最有自信的姿勢。你相信自己做得到，所以你真的做到了。'},
+      {id:'d2',ch:'c1',img:'photos/02.jpg',age:'舞蹈',title:'站上舞台',measure:'2023.07.18',text:'燈光亮起、台下坐滿了人，你還是跟著音樂把每個動作跳完。相信自己，就是這個樣子。'},
+      {id:'d4',ch:'c2',img:'photos/04.jpg',age:'畫畫',title:'你畫的山和河',measure:'日期待補',text:'紫色的山、彎彎的河、小房子和大樹，還有撒上去的白色雲霧。你的畫不用跟別人一樣，它就是你看世界的樣子。'},
+      {id:'d6',ch:'c2',img:'photos/06.jpg',age:'畫畫',title:'DORY 的小畫展',measure:'2025.03.01',text:'牆上貼滿你的畫，那幅山水畫也在上面。你拿著小紅花站在中間——這是你為自己贏得的掌聲。'},
+      {id:'d3',ch:'c3',img:'photos/03.jpg',age:'努力',title:'努力被看見了',measure:'2024.03.17',text:'胸前掛著獎牌、手上舉著獎狀。比起那張紙，我們更記得你為它練習了多少次。'},
+      {id:'d5',ch:'c3',img:'photos/05.jpg',age:'努力',title:'笑得最燦爛的 YA',measure:'2025.01',text:'又一張獎狀，你笑得眼睛都瞇起來了。你打敗的不是別人，而是那個曾經想說「我不行」的自己。'},
+      {id:'d7',ch:'c3',img:'photos/07.jpg',age:'鋼琴',title:'琴鍵前的專注',measure:'日期待補',text:'在大家面前彈琴需要很大的勇氣。你坐上去，一個音一個音把曲子彈完——那一刻，你戰勝了自己。'}
     ]
   };
   const WORDS=[
+    '相信自己，你比你想像的更勇敢。',
     '你不需要完美，做你自己就很好。',
-    '犯錯是學習的一部分，我們一起想辦法。',
-    '我欣賞的不是分數，而是你努力的樣子。',
-    '勇敢不是不害怕，而是害怕了還願意試試看。',
-    '你的感受很重要，想說的時候，我一直都在。',
+    '犯錯是學習的一部分，不代表你不夠好。',
     '做不到的事，只是「還」做不到而已。',
-    '無論你走多遠，家永遠是你的避風港。',
-    '謝謝你，讓我有機會成為你的家人。'
+    '你的對手不是別人，是昨天的自己。',
+    '記得常常為自己按一個讚。',
+    '不管輸贏，爸爸媽媽都以你為榮。',
+    '在我們心中，你永遠是最棒的。'
   ];
+  const NUM=['一','二','三','四','五','六','七','八','九','十'];
 
   let state;
   try{ state=JSON.parse(localStorage.getItem(LS)); }catch(e){}
-  if(!state||!state.steps) state=JSON.parse(JSON.stringify(DEFAULT));
+  if(!state||!state.steps||!state.chapters) state=JSON.parse(JSON.stringify(DEFAULT));
   const save=()=>{ try{localStorage.setItem(LS,JSON.stringify(state));}catch(e){} };
 
-  /* ---- photos in IndexedDB (fallback: memory only) ---- */
+  /* ---- uploaded photos in IndexedDB (fallback: memory only) ---- */
   const mem={}; let db=null;
   const dbReady=new Promise(res=>{
     try{ const r=indexedDB.open('growthcard',1);
@@ -200,7 +241,12 @@
   const $=s=>document.querySelector(s);
   const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   const camera='<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7l1.5-3h5L16 7"/><circle cx="12" cy="13.5" r="3.5"/></svg>';
+  const placeholder=`<span class="ph">${camera}<span class="edit-only">點此放入照片</span></span>`;
 
+  async function paintPhoto(btn){
+    const up=await getPhoto(btn.dataset.id), src=up||btn.dataset.default;
+    btn.innerHTML=(src?`<img alt="" src="${esc(src)}" onerror="this.remove()">`:'')+placeholder;
+  }
   function bindSimple(){
     document.querySelectorAll('[data-k]').forEach(el=>{
       el.textContent=state[el.dataset.k]??'';
@@ -209,38 +255,39 @@
   }
   async function renderSteps(){
     await dbReady;
-    const box=$('#steps');
-    box.innerHTML=state.steps.map((s,i)=>`
+    let html='', last=null, n=0;
+    state.steps.forEach((s,i)=>{
+      if(s.ch!==last){ last=s.ch; const c=state.chapters[s.ch]||{title:'',note:''};
+        html+=`<header class="chapter"><span class="no">第${NUM[n++]||n}章</span>
+          <h2 contenteditable="true" data-c="${esc(s.ch)}" data-cf="title">${esc(c.title)}</h2>
+          <p contenteditable="true" data-c="${esc(s.ch)}" data-cf="note">${esc(c.note)}</p></header>`; }
+      html+=`
       <article class="step" data-i="${i}">
-        <figure class="polaroid" style="margin:0">
-          <button class="photo" type="button" data-id="${s.id}" aria-label="更換「${esc(s.title)}」的照片">${s.img?`<img alt="${esc(s.title)}" src="${esc(s.img)}" onerror="this.remove()">`:''}<span class="ph">${camera}<span class="edit-only">點此放入照片</span></span></button>
-          <figcaption class="measure" contenteditable="true" data-f="measure">${esc(s.measure)}</figcaption>
+        <figure class="polaroid">
+          <button class="photo" type="button" data-id="${esc(s.id)}" data-default="${esc(s.img||'')}" aria-label="更換「${esc(s.title)}」的照片"></button>
+          <figcaption contenteditable="true" data-f="measure">${esc(s.measure)}</figcaption>
         </figure>
         <div class="txt">
           <span class="age" contenteditable="true" data-f="age">${esc(s.age)}</span>
-          <h2 contenteditable="true" data-f="title">${esc(s.title)}</h2>
+          <h3 contenteditable="true" data-f="title">${esc(s.title)}</h3>
           <p contenteditable="true" data-f="text">${esc(s.text)}</p>
           <button class="del edit-only" type="button" data-del="${i}">刪除這一段</button>
         </div>
-      </article>`).join('');
+      </article>`;
+    });
+    const box=$('#steps'); box.innerHTML=html;
     box.querySelectorAll('[data-f]').forEach(el=>{
       el.oninput=()=>{ const i=+el.closest('.step').dataset.i; state.steps[i][el.dataset.f]=el.innerText; save(); };
     });
-    for(const btn of box.querySelectorAll('.photo')){
-      const d=await getPhoto(btn.dataset.id);
-      if(d) btn.innerHTML=`<img alt="" src="${d}">`;
-    }
-    drawRuler();
-  }
-  function drawRuler(){
-    const r=$('#ruler'); const h=r.offsetHeight; let html='';
-    
-    r.innerHTML=html;
+    box.querySelectorAll('[data-c]').forEach(el=>{
+      el.oninput=()=>{ (state.chapters[el.dataset.c] ||= {title:'',note:''})[el.dataset.cf]=el.innerText; save(); };
+    });
+    await Promise.all([...box.querySelectorAll('.photo')].map(paintPhoto));
   }
 
   /* ---- interactions ---- */
   let target=null;
-  $('#steps').addEventListener('click',e=>{
+  document.addEventListener('click',e=>{
     const del=e.target.closest('[data-del]');
     if(del){ const i=+del.dataset.del; delPhoto(state.steps[i].id); state.steps.splice(i,1); save(); renderSteps(); toast('已刪除這一段'); return; }
     const p=e.target.closest('.photo');
@@ -249,30 +296,32 @@
   $('#file').addEventListener('change',async e=>{
     const f=e.target.files[0]; if(!f||!target) return;
     try{ const d=await resize(f); putPhoto(target,d);
-      const btn=document.querySelector(`.photo[data-id="${target}"]`); if(btn) btn.innerHTML=`<img alt="" src="${d}">`;
-      toast('照片已放入'); drawRuler();
+      const btn=document.querySelector(`.photo[data-id="${target}"]`); if(btn) paintPhoto(btn);
+      toast('照片已換好');
     }catch(err){ toast('這個檔案無法讀取，請改用 JPG 或 PNG 照片'); }
   });
   function addStep(){
-    state.steps.push({id:'s'+Date.now(),age:'哪一年',title:'新的回憶',measure:'日期',text:'寫下這個時刻發生的事，和你當時的心情。'});
-    save(); renderSteps().then(()=>{ const l=document.querySelector('.step:last-child'); l&&l.scrollIntoView({behavior:'smooth',block:'center'}); });
+    const ch=state.steps.length?state.steps[state.steps.length-1].ch:'c1';
+    state.steps.push({id:'s'+Date.now(),ch,img:'',age:'回憶',title:'新的回憶',measure:'日期',text:'寫下這個時刻發生的事，和你當時的心情。'});
+    save(); renderSteps().then(()=>{ const l=document.querySelector('.step:last-of-type'); l&&l.scrollIntoView({behavior:'smooth',block:'center'}); });
   }
   $('#addBtn').onclick=addStep; $('#addBtn2').onclick=addStep;
 
   let armed=false,armT;
   $('#resetBtn').onclick=()=>{
     const b=$('#resetBtn');
-    if(!armed){ armed=true; b.textContent='再按一次：清除全部內容與照片'; armT=setTimeout(()=>{armed=false;b.textContent='重設範例';},4000); return; }
+    if(!armed){ armed=true; b.textContent='再按一次：清除所有修改'; armT=setTimeout(()=>{armed=false;b.textContent='重設範例';},4000); return; }
     clearTimeout(armT); armed=false; b.textContent='重設範例';
-    state.steps.forEach(s=>delPhoto(s.id));
-    state=JSON.parse(JSON.stringify(DEFAULT)); save(); bindSimple(); renderSteps(); toast('已恢復範例內容');
+    state.steps.forEach(s=>delPhoto(s.id)); delPhoto('cover'); delPhoto('finale');
+    state=JSON.parse(JSON.stringify(DEFAULT)); save(); bindSimple(); renderSteps();
+    document.querySelectorAll('.cover .photo,.finale .photo').forEach(paintPhoto); toast('已恢復原本的內容');
   };
 
   function setMode(edit){
     document.body.classList.toggle('edit',edit);
     document.querySelectorAll('[contenteditable]').forEach(el=>el.setAttribute('contenteditable',edit?'true':'false'));
     $('#modeBtn').textContent=edit?'預覽卡片':'回到編輯';
-    $('#hint').textContent=edit?'點文字直接修改，點相框放入照片。內容只存在這台裝置的瀏覽器裡。':'這是女兒會看到的樣子。可截圖分享，或在電腦開啟檔案列印。';
+    $('#hint').textContent=edit?'點文字直接修改，點照片可以更換。你的修改只存在這台裝置的瀏覽器裡。':'這是 DORY 會看到的樣子。';
   }
   $('#modeBtn').onclick=()=>setMode(!document.body.classList.contains('edit'));
   new MutationObserver(()=>setMode(document.body.classList.contains('edit'))).observe($('#steps'),{childList:true});
@@ -285,8 +334,9 @@
   });
 
   let tt; function toast(m){ const t=$('#toast'); t.textContent=m; t.hidden=false; clearTimeout(tt); tt=setTimeout(()=>t.hidden=true,1800); }
-  window.addEventListener('resize',drawRuler);
 
-  bindSimple(); renderSteps(); setMode(true);
+  bindSimple();
+  dbReady.then(()=>document.querySelectorAll('.cover .photo,.finale .photo').forEach(paintPhoto));
+  renderSteps(); setMode(false);
 })();
 </script>

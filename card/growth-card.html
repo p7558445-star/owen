@@ -1,0 +1,288 @@
+<title>成長小書卡片</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Iansui&family=LXGW+WenKai+TC:wght@400;700&family=Noto+Sans+TC:wght@400;600&display=swap">
+<style>
+  :root{
+    --ground:#E6EDE7;      /* 淡薄荷紙 */
+    --paper:#FFFDF8;
+    --ink:#2F3A4A;         /* 鋼筆藍黑 */
+    --ink-soft:#5E6B7C;
+    --tape-pink:#F2A7A0;
+    --tape-yellow:#F3D57A;
+    --leaf:#6F9C7E;
+    --rule:#C9D5CC;
+    --hand:"Iansui","LXGW WenKai TC","Kaiti TC","BiauKai","STKaiti",serif;
+    --body:"LXGW WenKai TC","Kaiti TC","BiauKai","STKaiti",serif;
+    --ui:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--ground);color:var(--ink);font-family:var(--body);
+    background-image:radial-gradient(rgba(47,58,74,.05) 1px,transparent 1px);background-size:18px 18px}
+  .wrap{max-width:760px;margin:0 auto;padding-inline:16px;padding-block:0 64px}
+
+  /* toolbar */
+  .bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:10;display:flex;flex-wrap:wrap;gap:8px;align-items:center;
+    padding-block:10px;margin-bottom:8px;background:var(--ground);font-family:var(--ui);font-size:13px}
+  .bar .hint{color:var(--ink-soft);flex:1 1 200px}
+  .btn{font:inherit;border:1.5px solid var(--ink);background:var(--paper);color:var(--ink);border-radius:999px;padding:6px 14px;cursor:pointer}
+  .btn:hover{background:var(--tape-yellow)}
+  .btn.primary{background:var(--ink);color:var(--paper)}
+  .btn.primary:hover{background:#44536a}
+  .btn:focus-visible,[contenteditable]:focus-visible,.photo:focus-visible,.chip:focus-visible{outline:2px dashed var(--leaf);outline-offset:3px}
+  .btn.warn{border-color:#B5524A;color:#B5524A}
+
+  /* cover */
+  .cover{position:relative;background:var(--paper);padding:48px 28px 40px;margin-top:8px;text-align:center;
+    box-shadow:0 1px 0 rgba(0,0,0,.04),0 12px 30px -18px rgba(47,58,74,.45)}
+  .cover::before,.cover::after{content:"";position:absolute;top:-10px;width:90px;height:24px;background:var(--tape-pink);opacity:.85}
+  .cover::before{left:24px;transform:rotate(-6deg)}
+  .cover::after{right:24px;transform:rotate(5deg);background:var(--tape-yellow)}
+  .eyebrow{font-family:var(--ui);font-size:12px;letter-spacing:.25em;color:var(--leaf)}
+  .cover h1{font-family:var(--hand);font-weight:400;font-size:clamp(34px,8vw,56px);line-height:1.2;margin:14px 0 6px;text-wrap:balance}
+  .cover h1 .name{color:#C8645B}
+  .cover .sub{font-size:18px;color:var(--ink-soft);margin:0}
+  .sprig{display:block;margin:18px auto 0;width:120px;height:40px}
+
+  /* timeline with height ruler */
+  .timeline{position:relative;margin-top:36px;padding-left:56px}
+  .ruler{position:absolute;left:0;top:0;bottom:0;width:40px;background:
+     repeating-linear-gradient(to bottom,var(--ink-soft) 0 1.5px,transparent 1.5px 60px) right/18px 100% no-repeat,
+     repeating-linear-gradient(to bottom,var(--rule) 0 1px,transparent 1px 12px) right/9px 100% no-repeat;
+     border-right:2px solid var(--ink-soft)}
+  .ruler span{position:absolute;right:22px;font-family:var(--ui);font-size:10px;color:var(--ink-soft);transform:translateY(-50%)}
+  .step{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:24px;align-items:center;margin-bottom:44px}
+  .step:nth-child(even) .polaroid{order:2;transform:rotate(2.5deg)}
+  .step::before{content:"";position:absolute;left:-26px;top:50%;width:14px;height:14px;border-radius:50%;background:var(--leaf);border:3px solid var(--paper);transform:translate(-50%,-50%);box-shadow:0 0 0 1.5px var(--leaf)}
+  .polaroid{position:relative;background:var(--paper);padding:12px 12px 14px;transform:rotate(-2.5deg);box-shadow:0 10px 24px -14px rgba(47,58,74,.55)}
+  .polaroid::before{content:"";position:absolute;top:-11px;left:50%;width:72px;height:22px;transform:translateX(-50%) rotate(-3deg);background:var(--tape-yellow);opacity:.85}
+  .step:nth-child(3n) .polaroid::before{background:var(--tape-pink)}
+  .photo{display:block;width:100%;max-width:100%;aspect-ratio:4/5;border:0;padding:0;background:#EEF1EC;cursor:pointer;overflow:hidden;position:relative}
+  .photo img{width:100%;height:100%;object-fit:cover;display:block}
+  .photo .ph{position:absolute;inset:0;display:grid;place-content:center;gap:6px;color:var(--ink-soft);font-family:var(--ui);font-size:13px;text-align:center;
+    background:repeating-linear-gradient(45deg,transparent 0 10px,rgba(111,156,126,.08) 10px 20px)}
+  .photo .ph svg{margin:0 auto}
+  .polaroid .measure{font-family:var(--hand);font-size:18px;text-align:center;margin-top:8px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+  .txt .age{font-family:var(--ui);font-size:12px;letter-spacing:.2em;color:var(--leaf);display:inline-block}
+  .txt h2{font-family:var(--hand);font-weight:400;font-size:28px;margin:4px 0 10px;line-height:1.25}
+  .txt p{font-size:17px;line-height:1.9;margin:0}
+  .del{margin-top:10px;font-family:var(--ui);font-size:12px;background:none;border:0;color:#B5524A;cursor:pointer;padding:0;text-decoration:underline}
+
+  /* letter */
+  .letter{position:relative;background:var(--paper);padding:40px 28px 36px;margin-top:12px;
+    background-image:repeating-linear-gradient(to bottom,transparent 0 35px,var(--rule) 35px 36px);background-position:0 22px;
+    box-shadow:0 12px 30px -18px rgba(47,58,74,.45)}
+  .letter::before{content:"";position:absolute;top:-10px;left:50%;width:100px;height:24px;background:var(--tape-pink);opacity:.85;transform:translateX(-50%) rotate(2deg)}
+  .letter .dear{font-family:var(--hand);font-size:26px;margin:0 0 6px;line-height:36px}
+  .letter .body{font-family:var(--hand);font-size:20px;line-height:36px;white-space:pre-wrap;min-height:180px}
+  .letter .sign{font-family:var(--hand);font-size:22px;text-align:right;line-height:36px;margin-top:12px}
+  .bank{margin-top:18px;font-family:var(--ui);font-size:13px}
+  .bank h3{font-size:13px;font-weight:600;margin:0 0 8px;color:var(--ink-soft)}
+  .chips{display:flex;flex-wrap:wrap;gap:8px}
+  .chip{font-family:var(--body);font-size:15px;border:1.5px dashed var(--leaf);background:transparent;color:var(--ink);border-radius:6px;padding:6px 10px;cursor:pointer;text-align:left}
+  .chip:hover{background:#DCEADF}
+  .addrow{text-align:center;margin:-16px 0 36px}
+
+  [contenteditable]{border-radius:4px;outline:none}
+  body.edit [contenteditable]{box-shadow:inset 0 -1.5px 0 rgba(111,156,126,.55)}
+  body.edit [contenteditable]:hover{background:rgba(243,213,122,.25)}
+  body:not(.edit) .edit-only{display:none!important}
+  body:not(.edit) .photo{cursor:default}
+  .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--paper);font-family:var(--ui);font-size:13px;padding:8px 16px;border-radius:999px}
+
+  @media (max-width:560px){
+    .timeline{padding-left:40px}
+    .ruler{width:26px}.ruler span{display:none}
+    .step::before{left:-20px}
+    .step{grid-template-columns:1fr;gap:14px}
+    .step:nth-child(even) .polaroid{order:0}
+    .polaroid{max-width:300px;margin-inline:auto;width:100%}
+  }
+  @media (prefers-reduced-motion:no-preference){ .polaroid{transition:transform .3s} .polaroid:hover{transform:rotate(0) scale(1.02)} }
+  @media print{ .bar,.edit-only,.bank{display:none!important} body{background:#fff} .step,.letter{break-inside:avoid} }
+</style>
+
+<div class="wrap">
+  <div class="bar edit-only-bar">
+    <span class="hint" id="hint">點文字直接修改，點相框放入照片。內容只存在這台裝置的瀏覽器裡。</span>
+    <button class="btn edit-only" id="addBtn" type="button">＋ 新增一段</button>
+    <button class="btn warn edit-only" id="resetBtn" type="button">重設範例</button>
+    <button class="btn primary" id="modeBtn" type="button">預覽卡片</button>
+  </div>
+
+  <section class="cover">
+    <div class="eyebrow" contenteditable="true" data-k="eyebrow"></div>
+    <h1>給 <span class="name" contenteditable="true" data-k="name"></span> 的成長小書</h1>
+    <p class="sub" contenteditable="true" data-k="sub"></p>
+    <svg class="sprig" viewBox="0 0 120 40" aria-hidden="true"><path d="M8 32 C40 30 70 20 112 8" fill="none" stroke="#6F9C7E" stroke-width="2" stroke-linecap="round"/><g fill="#6F9C7E"><ellipse cx="34" cy="24" rx="8" ry="4" transform="rotate(-30 34 24)"/><ellipse cx="42" cy="32" rx="8" ry="4" transform="rotate(20 42 32)"/><ellipse cx="64" cy="16" rx="8" ry="4" transform="rotate(-35 64 16)"/><ellipse cx="72" cy="25" rx="8" ry="4" transform="rotate(15 72 25)"/><ellipse cx="94" cy="8" rx="7" ry="3.5" transform="rotate(-40 94 8)"/></g><circle cx="112" cy="8" r="4" fill="#F2A7A0"/></svg>
+  </section>
+
+  <section class="timeline" id="timeline" aria-label="成長歷程">
+    <div class="ruler" id="ruler" aria-hidden="true"></div>
+    <div id="steps"></div>
+  </section>
+  <div class="addrow edit-only"><button class="btn" id="addBtn2" type="button">＋ 在最後新增一段回憶</button></div>
+
+  <section class="letter">
+    <p class="dear">親愛的 <span contenteditable="true" data-k="name2"></span>：</p>
+    <div class="body" contenteditable="true" data-k="letter" id="letter"></div>
+    <div class="sign"><span contenteditable="true" data-k="date"></span><br><span contenteditable="true" data-k="sign"></span></div>
+  </section>
+
+  <div class="bank edit-only">
+    <h3>鼓勵話語庫 —— 點一下就加進信裡</h3>
+    <div class="chips" id="chips"></div>
+  </div>
+</div>
+<div class="toast" id="toast" hidden></div>
+<input type="file" id="file" accept="image/*" hidden>
+
+<script>
+(function(){
+  const LS='growthcard.v1';
+  const DEFAULT={
+    eyebrow:'LOVE · GROWTH · 2026',
+    name:'小寶貝', name2:'小寶貝',
+    sub:'從第一聲哭聲，到今天自信的笑容',
+    date:'2026 年 9 月 23 日', sign:'永遠愛你的 爸爸',
+    letter:'謝謝你來到我們家。\n看著你一天一天長大，我最驕傲的從來不是你得了幾分、拿了什麼獎，而是你遇到困難時，還願意再試一次的樣子。\n\n未來的路上一定會有跌倒的時候，沒關係——你一歲時跌倒了一百次，最後還是學會了走路。\n\n',
+    steps:[
+      {id:'s1',age:'0 歲',title:'你來了',measure:'50 cm · 3.2 kg',text:'那天你緊緊握住我的手指，從此我們的世界多了一個最重要的人。'},
+      {id:'s2',age:'1 歲',title:'勇敢的第一步',measure:'75 cm',text:'你搖搖晃晃地跌倒又站起來，一次、兩次、十次——你從來沒有放棄過。'},
+      {id:'s3',age:'3 歲',title:'第一天上幼兒園',measure:'95 cm',text:'你哭著揮手說再見，放學卻笑著跑向我，說你交到了新朋友。'},
+      {id:'s4',age:'6 歲',title:'成為小學生',measure:'115 cm',text:'你開始學寫字，一筆一畫都很認真。字不一定每個都漂亮，但那份認真最漂亮。'},
+      {id:'s5',age:'現在',title:'今天的你',measure:'— cm',text:'你有自己的想法和喜歡的事，也懂得關心別人。陪你長大，是我這輩子最幸福的事。'}
+    ]
+  };
+  const WORDS=[
+    '你不需要完美，做你自己就很好。',
+    '犯錯是學習的一部分，我們一起想辦法。',
+    '我欣賞的不是分數，而是你努力的樣子。',
+    '勇敢不是不害怕，而是害怕了還願意試試看。',
+    '你的感受很重要，想說的時候，我一直都在。',
+    '做不到的事，只是「還」做不到而已。',
+    '無論你走多遠，家永遠是你的避風港。',
+    '謝謝你，讓我有機會成為你的家人。'
+  ];
+
+  let state;
+  try{ state=JSON.parse(localStorage.getItem(LS)); }catch(e){}
+  if(!state||!state.steps) state=JSON.parse(JSON.stringify(DEFAULT));
+  const save=()=>{ try{localStorage.setItem(LS,JSON.stringify(state));}catch(e){} };
+
+  /* ---- photos in IndexedDB (fallback: memory only) ---- */
+  const mem={}; let db=null;
+  const dbReady=new Promise(res=>{
+    try{ const r=indexedDB.open('growthcard',1);
+      r.onupgradeneeded=()=>r.result.createObjectStore('p');
+      r.onsuccess=()=>{db=r.result;res();}; r.onerror=()=>res();
+    }catch(e){res();}
+  });
+  function putPhoto(id,data){ mem[id]=data; if(!db)return; try{db.transaction('p','readwrite').objectStore('p').put(data,id);}catch(e){} }
+  function delPhoto(id){ delete mem[id]; if(!db)return; try{db.transaction('p','readwrite').objectStore('p').delete(id);}catch(e){} }
+  function getPhoto(id){ return new Promise(res=>{ if(mem[id]||!db) return res(mem[id]);
+    try{const q=db.transaction('p').objectStore('p').get(id); q.onsuccess=()=>{if(q.result)mem[id]=q.result;res(q.result)}; q.onerror=()=>res();}catch(e){res();} }); }
+
+  function resize(file){ return new Promise((res,rej)=>{
+    const fr=new FileReader(); fr.onerror=rej;
+    fr.onload=()=>{ const img=new Image(); img.onerror=rej;
+      img.onload=()=>{ const M=1200, s=Math.min(1,M/Math.max(img.width,img.height));
+        const c=document.createElement('canvas'); c.width=Math.round(img.width*s); c.height=Math.round(img.height*s);
+        c.getContext('2d').drawImage(img,0,0,c.width,c.height); res(c.toDataURL('image/jpeg',.86)); };
+      img.src=fr.result; };
+    fr.readAsDataURL(file); }); }
+
+  /* ---- render ---- */
+  const $=s=>document.querySelector(s);
+  const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const camera='<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7l1.5-3h5L16 7"/><circle cx="12" cy="13.5" r="3.5"/></svg>';
+
+  function bindSimple(){
+    document.querySelectorAll('[data-k]').forEach(el=>{
+      el.textContent=state[el.dataset.k]??'';
+      el.oninput=()=>{ state[el.dataset.k]=el.innerText; save(); };
+    });
+  }
+  async function renderSteps(){
+    await dbReady;
+    const box=$('#steps');
+    box.innerHTML=state.steps.map((s,i)=>`
+      <article class="step" data-i="${i}">
+        <figure class="polaroid" style="margin:0">
+          <button class="photo" type="button" data-id="${s.id}" aria-label="放入「${esc(s.title)}」的照片"><span class="ph">${camera}<span class="edit-only">點此放入照片</span></span></button>
+          <figcaption class="measure" contenteditable="true" data-f="measure">${esc(s.measure)}</figcaption>
+        </figure>
+        <div class="txt">
+          <span class="age" contenteditable="true" data-f="age">${esc(s.age)}</span>
+          <h2 contenteditable="true" data-f="title">${esc(s.title)}</h2>
+          <p contenteditable="true" data-f="text">${esc(s.text)}</p>
+          <button class="del edit-only" type="button" data-del="${i}">刪除這一段</button>
+        </div>
+      </article>`).join('');
+    box.querySelectorAll('[data-f]').forEach(el=>{
+      el.oninput=()=>{ const i=+el.closest('.step').dataset.i; state.steps[i][el.dataset.f]=el.innerText; save(); };
+    });
+    for(const btn of box.querySelectorAll('.photo')){
+      const d=await getPhoto(btn.dataset.id);
+      if(d) btn.innerHTML=`<img alt="" src="${d}">`;
+    }
+    drawRuler();
+  }
+  function drawRuler(){
+    const r=$('#ruler'); const h=r.offsetHeight; let html='';
+    for(let y=0,cm=0;y<h;y+=60,cm+=10) html+=`<span style="top:${y}px">${cm}</span>`;
+    r.innerHTML=html;
+  }
+
+  /* ---- interactions ---- */
+  let target=null;
+  $('#steps').addEventListener('click',e=>{
+    const del=e.target.closest('[data-del]');
+    if(del){ const i=+del.dataset.del; delPhoto(state.steps[i].id); state.steps.splice(i,1); save(); renderSteps(); toast('已刪除這一段'); return; }
+    const p=e.target.closest('.photo');
+    if(p && document.body.classList.contains('edit')){ target=p.dataset.id; $('#file').value=''; $('#file').click(); }
+  });
+  $('#file').addEventListener('change',async e=>{
+    const f=e.target.files[0]; if(!f||!target) return;
+    try{ const d=await resize(f); putPhoto(target,d);
+      const btn=document.querySelector(`.photo[data-id="${target}"]`); if(btn) btn.innerHTML=`<img alt="" src="${d}">`;
+      toast('照片已放入'); drawRuler();
+    }catch(err){ toast('這個檔案無法讀取，請改用 JPG 或 PNG 照片'); }
+  });
+  function addStep(){
+    state.steps.push({id:'s'+Date.now(),age:'幾歲',title:'新的回憶',measure:'— cm',text:'寫下這個時刻發生的事，和你當時的心情。'});
+    save(); renderSteps().then(()=>{ const l=document.querySelector('.step:last-child'); l&&l.scrollIntoView({behavior:'smooth',block:'center'}); });
+  }
+  $('#addBtn').onclick=addStep; $('#addBtn2').onclick=addStep;
+
+  let armed=false,armT;
+  $('#resetBtn').onclick=()=>{
+    const b=$('#resetBtn');
+    if(!armed){ armed=true; b.textContent='再按一次：清除全部內容與照片'; armT=setTimeout(()=>{armed=false;b.textContent='重設範例';},4000); return; }
+    clearTimeout(armT); armed=false; b.textContent='重設範例';
+    state.steps.forEach(s=>delPhoto(s.id));
+    state=JSON.parse(JSON.stringify(DEFAULT)); save(); bindSimple(); renderSteps(); toast('已恢復範例內容');
+  };
+
+  function setMode(edit){
+    document.body.classList.toggle('edit',edit);
+    document.querySelectorAll('[contenteditable]').forEach(el=>el.setAttribute('contenteditable',edit?'true':'false'));
+    $('#modeBtn').textContent=edit?'預覽卡片':'回到編輯';
+    $('#hint').textContent=edit?'點文字直接修改，點相框放入照片。內容只存在這台裝置的瀏覽器裡。':'這是女兒會看到的樣子。可截圖分享，或在電腦開啟檔案列印。';
+  }
+  $('#modeBtn').onclick=()=>setMode(!document.body.classList.contains('edit'));
+  new MutationObserver(()=>setMode(document.body.classList.contains('edit'))).observe($('#steps'),{childList:true});
+
+  $('#chips').innerHTML=WORDS.map(w=>`<button class="chip" type="button">${esc(w)}</button>`).join('');
+  $('#chips').addEventListener('click',e=>{
+    const c=e.target.closest('.chip'); if(!c) return;
+    state.letter=(state.letter||'').replace(/\s*$/,'')+'\n'+c.textContent+'\n'; save();
+    $('#letter').textContent=state.letter; toast('已加進信裡');
+  });
+
+  let tt; function toast(m){ const t=$('#toast'); t.textContent=m; t.hidden=false; clearTimeout(tt); tt=setTimeout(()=>t.hidden=true,1800); }
+  window.addEventListener('resize',drawRuler);
+
+  bindSimple(); renderSteps(); setMode(true);
+})();
+</script>

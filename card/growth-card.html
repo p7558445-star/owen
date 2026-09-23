@@ -1,4 +1,4 @@
-<title>成長小書卡片</title>
+<title>DORY 的成長小書</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Iansui&family=LXGW+WenKai+TC:wght@400;700&family=Noto+Sans+TC:wght@400;600&display=swap">
@@ -58,7 +58,7 @@
   .polaroid::before{content:"";position:absolute;top:-11px;left:50%;width:72px;height:22px;transform:translateX(-50%) rotate(-3deg);background:var(--tape-yellow);opacity:.85}
   .step:nth-child(3n) .polaroid::before{background:var(--tape-pink)}
   .photo{display:block;width:100%;max-width:100%;aspect-ratio:4/5;border:0;padding:0;background:#EEF1EC;cursor:pointer;overflow:hidden;position:relative}
-  .photo img{width:100%;height:100%;object-fit:cover;display:block}
+  .photo img{position:absolute;inset:0;z-index:1;width:100%;height:100%;object-fit:cover;display:block}
   .photo .ph{position:absolute;inset:0;display:grid;place-content:center;gap:6px;color:var(--ink-soft);font-family:var(--ui);font-size:13px;text-align:center;
     background:repeating-linear-gradient(45deg,transparent 0 10px,rgba(111,156,126,.08) 10px 20px)}
   .photo .ph svg{margin:0 auto}
@@ -139,19 +139,23 @@
 
 <script>
 (function(){
-  const LS='growthcard.v1';
+  const LS='growthcard.dory.v2';
   const DEFAULT={
-    eyebrow:'LOVE · GROWTH · 2026',
-    name:'小寶貝', name2:'小寶貝',
-    sub:'從第一聲哭聲，到今天自信的笑容',
+    eyebrow:'DORY · 2023 — 2025',
+    name:'DORY', name2:'亦倢',
+    sub:'從舞台、畫紙到琴鍵，每一步都是你',
     date:'2026 年 9 月 23 日', sign:'永遠愛你的 爸爸',
-    letter:'謝謝你來到我們家。\n看著你一天一天長大，我最驕傲的從來不是你得了幾分、拿了什麼獎，而是你遇到困難時，還願意再試一次的樣子。\n\n未來的路上一定會有跌倒的時候，沒關係——你一歲時跌倒了一百次，最後還是學會了走路。\n\n',
+    letter:'謝謝你來到我們家。\n這幾年，我看著你站上舞台跳舞、在畫紙上畫出自己的山和河、在大家面前彈鋼琴。我最驕傲的從來不是獎狀有幾張，而是你每一次願意上台、願意嘗試的勇氣。\n\n以後一定也會有跳錯、畫壞、彈錯音的時候，沒關係——那只代表你正在學新的東西。\n\n不管你想當小舞者、小畫家、小鋼琴家，還是任何樣子的自己，我們都會在台下，為你用力鼓掌。\n',
     steps:[
-      {id:'s1',age:'0 歲',title:'你來了',measure:'50 cm · 3.2 kg',text:'那天你緊緊握住我的手指，從此我們的世界多了一個最重要的人。'},
-      {id:'s2',age:'1 歲',title:'勇敢的第一步',measure:'75 cm',text:'你搖搖晃晃地跌倒又站起來，一次、兩次、十次——你從來沒有放棄過。'},
-      {id:'s3',age:'3 歲',title:'第一天上幼兒園',measure:'95 cm',text:'你哭著揮手說再見，放學卻笑著跑向我，說你交到了新朋友。'},
-      {id:'s4',age:'6 歲',title:'成為小學生',measure:'115 cm',text:'你開始學寫字，一筆一畫都很認真。字不一定每個都漂亮，但那份認真最漂亮。'},
-      {id:'s5',age:'現在',title:'今天的你',measure:'— cm',text:'你有自己的想法和喜歡的事，也懂得關心別人。陪你長大，是我這輩子最幸福的事。'}
+      {id:'d1',img:'photos/01.jpg',age:'2023 夏',title:'舞蹈教室裡的小舞者',measure:'2023.07.15',text:'穿上亮晶晶的表演服，踮起腳尖擺好姿勢。那時候的你，已經懂得為了喜歡的事認真練習。'},
+      {id:'d2',img:'photos/02.jpg',age:'2023 夏',title:'站上舞台',measure:'2023.08.05',text:'燈光亮起、台下坐滿了人，你還是跟著音樂把每個動作跳完。勇敢，就是這個樣子。'},
+      {id:'d3',img:'photos/03.jpg',age:'2024 春',title:'努力被看見了',measure:'2024.03.17',text:'胸前掛著獎牌、手上舉著獎狀。比起那張紙，我更記得你為它花了多少時間。'},
+      {id:'d4',img:'photos/04.jpg',age:'畫畫時光',title:'你畫的山和河',measure:'日期待補',text:'紫色的山、彎彎的河、小房子和大樹，還有撒上去的白色雲霧。你看世界的方式，總有自己的顏色。'},
+      {id:'d5',img:'photos/05.jpg',age:'2025 冬',title:'笑得最燦爛的 YA',measure:'2025.01.17',text:'又一張獎狀，你笑得眼睛都瞇起來了。努力之後的快樂，是誰都拿不走的。'},
+      {id:'d6',img:'photos/06.jpg',age:'2025 春',title:'DORY 的小畫展',measure:'2025.03.01',text:'牆上貼滿你的畫，你拿著小紅花站在中間——那幅山水畫也在上面喔！'},
+      {id:'d7',img:'photos/07.jpg',age:'鋼琴時光',title:'琴鍵前的專注',measure:'日期待補',text:'在大家面前彈琴需要很大的勇氣。你坐上去，一個音一個音，把曲子完整地彈完。'},
+      {id:'d8',img:'photos/08.jpg',age:'2025 夏',title:'公主之夜',measure:'2025.05.31',text:'穿上安娜公主的禮服、戴上小皇冠，還比了一個讚。做自己喜歡的樣子，就是最美的樣子。'},
+      {id:'d9',img:'photos/09.jpg',age:'2025 夏',title:'繡球花開的日子',measure:'2025.06.22',text:'滿山的繡球花裡，你靠著爸爸比 YA。最喜歡這樣的時光：什麼都不用做，只要和你在一起。'}
     ]
   };
   const WORDS=[
@@ -209,7 +213,7 @@
     box.innerHTML=state.steps.map((s,i)=>`
       <article class="step" data-i="${i}">
         <figure class="polaroid" style="margin:0">
-          <button class="photo" type="button" data-id="${s.id}" aria-label="放入「${esc(s.title)}」的照片"><span class="ph">${camera}<span class="edit-only">點此放入照片</span></span></button>
+          <button class="photo" type="button" data-id="${s.id}" aria-label="更換「${esc(s.title)}」的照片">${s.img?`<img alt="${esc(s.title)}" src="${esc(s.img)}" onerror="this.remove()">`:''}<span class="ph">${camera}<span class="edit-only">點此放入照片</span></span></button>
           <figcaption class="measure" contenteditable="true" data-f="measure">${esc(s.measure)}</figcaption>
         </figure>
         <div class="txt">
@@ -230,7 +234,7 @@
   }
   function drawRuler(){
     const r=$('#ruler'); const h=r.offsetHeight; let html='';
-    for(let y=0,cm=0;y<h;y+=60,cm+=10) html+=`<span style="top:${y}px">${cm}</span>`;
+    
     r.innerHTML=html;
   }
 
@@ -250,7 +254,7 @@
     }catch(err){ toast('這個檔案無法讀取，請改用 JPG 或 PNG 照片'); }
   });
   function addStep(){
-    state.steps.push({id:'s'+Date.now(),age:'幾歲',title:'新的回憶',measure:'— cm',text:'寫下這個時刻發生的事，和你當時的心情。'});
+    state.steps.push({id:'s'+Date.now(),age:'哪一年',title:'新的回憶',measure:'日期',text:'寫下這個時刻發生的事，和你當時的心情。'});
     save(); renderSteps().then(()=>{ const l=document.querySelector('.step:last-child'); l&&l.scrollIntoView({behavior:'smooth',block:'center'}); });
   }
   $('#addBtn').onclick=addStep; $('#addBtn2').onclick=addStep;

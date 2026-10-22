@@ -1,0 +1,111 @@
+// =====================================================================
+// EPA 學習評量 — DAX 量值
+// 建議:建立一張空白表「_量值」放置所有量值(常用 → 輸入資料 → 空表)。
+// 分數 = 1a..5 換算成 1–10;主等級 = 1–5(ten Cate entrustment level)。
+// 信賴等級是「順序尺度」:主要看中位數、等級分布與達標率,平均分數只當輔助。
+// =====================================================================
+
+// ---------- 基本 ----------
+評量筆數 = COUNTROWS ( fact_EPA )
+
+受評人數 = DISTINCTCOUNT ( fact_EPA[姓名] )
+
+平均分數 = AVERAGE ( fact_EPA[分數] )
+
+分數中位數 = MEDIAN ( fact_EPA[分數] )
+
+分數標準差 = STDEV.S ( fact_EPA[分數] )
+
+主等級中位數 = MEDIAN ( fact_EPA[主等級] )
+
+平均主等級 = AVERAGE ( fact_EPA[主等級] )
+
+// 分數 25/75 百分位(四分位距,適合順序資料的離散度)
+分數P25 = PERCENTILE.INC ( fact_EPA[分數], 0.25 )
+分數P75 = PERCENTILE.INC ( fact_EPA[分數], 0.75 )
+
+// ---------- 達標率 ----------
+// 需先建立「模型 → 新增參數 → 數值範圍」:名稱 達標門檻,最小 1、最大 5、增量 1、預設 4
+// (會產生資料表 達標門檻[達標門檻]),再放一個交叉分析篩選器讓使用者切換門檻。
+目前門檻 = SELECTEDVALUE ( 達標門檻[達標門檻], 4 )
+
+達標筆數 =
+VAR t = [目前門檻]
+RETURN CALCULATE ( COUNTROWS ( fact_EPA ), fact_EPA[主等級] >= t )
+
+達標率 =
+DIVIDE ( [達標筆數], CALCULATE ( COUNTROWS ( fact_EPA ), NOT ISBLANK ( fact_EPA[主等級] ) ) )
+
+// 某主等級佔比(放在 100% 堆疊橫條,圖例 = dim_信賴等級[主等級說明])
+等級占比 =
+DIVIDE ( [評量筆數], CALCULATE ( [評量筆數], REMOVEFILTERS ( dim_信賴等級 ) ) )
+
+// ---------- 同儕比較(同期間、同職級) ----------
+同職級平均分數 =
+VAR r = VALUES ( fact_EPA[職級] )
+RETURN
+    CALCULATE ( [平均分數], REMOVEFILTERS ( dim_住院醫師 ), REMOVEFILTERS ( fact_EPA[姓名] ), TREATAS ( r, dim_職級[職級] ) )
+
+與同儕差 = [平均分數] - [同職級平均分數]
+
+// 同職級中的百分等級(0–1)。以每位住院醫師的平均分數排名。
+同職級百分等級 =
+VAR me = [平均分數]
+VAR r  = VALUES ( fact_EPA[職級] )
+VAR peers =
+    CALCULATETABLE (
+        ADDCOLUMNS ( VALUES ( dim_住院醫師[姓名] ), "@s", [平均分數] ),
+        REMOVEFILTERS ( dim_住院醫師 ),
+        TREATAS ( r, dim_職級[職級] )
+    )
+VAR n = COUNTROWS ( FILTER ( peers, NOT ISBLANK ( [@s] ) ) )
+RETURN
+    IF ( NOT ISBLANK ( me ) && n > 1,
+         DIVIDE ( COUNTROWS ( FILTER ( peers, [@s] < me ) ), n - 1 ) )
+
+// ---------- 時間比較 ----------
+上半年平均分數 = CALCULATE ( [平均分數], dim_期間[半年] = 1 )
+
+下半年平均分數 = CALCULATE ( [平均分數], dim_期間[半年] = 2 )
+
+// 同一年度內 下半年 − 上半年
+半年成長 =
+IF ( NOT ISBLANK ( [上半年平均分數] ) && NOT ISBLANK ( [下半年平均分數] ),
+     [下半年平均分數] - [上半年平均分數] )
+
+// 前一個半年(可跨年度:2026 上半年 的前期 = 2025 下半年)
+前期平均分數 =
+VAR cur = MAX ( dim_期間[期間序號] )
+RETURN CALCULATE ( [平均分數], REMOVEFILTERS ( dim_期間 ), dim_期間[期間序號] = cur - 1 )
+
+期間變化 =
+IF ( NOT ISBLANK ( [前期平均分數] ) && NOT ISBLANK ( [平均分數] ), [平均分數] - [前期平均分數] )
+
+// ---------- 需關注(對照 dim_職級[期望主等級]) ----------
+// fact 不會反向篩選 dim_職級,故以 TREATAS 把目前列的職級帶過去
+期望主等級 =
+VAR r = VALUES ( fact_EPA[職級] )
+RETURN CALCULATE ( MAX ( dim_職級[期望主等級] ), TREATAS ( r, dim_職級[職級] ) )
+
+// 該格(人 × EPA × 期間)主等級中位數是否低於所屬職級期望:1 = 低於
+低於期望 =
+VAR m = [主等級中位數]
+VAR e = [期望主等級]
+RETURN IF ( NOT ISBLANK ( m ) && NOT ISBLANK ( e ), IF ( m < e, 1, 0 ) )
+
+// 個人在目前期間低於期望的 EPA 數(放在 住院醫師 × 期間 表格)
+低於期望EPA數 =
+SUMX ( VALUES ( dim_EPA[EPA編號] ), [低於期望] )
+
+// ---------- 資料品質 ----------
+未對應等級筆數 = CALCULATE ( COUNTROWS ( fact_EPA ), ISBLANK ( fact_EPA[主等級] ) )
+
+缺期間筆數 = CALCULATE ( COUNTROWS ( fact_EPA ), ISBLANK ( fact_EPA[期間序號] ) )
+
+缺職級筆數 = CALCULATE ( COUNTROWS ( fact_EPA ), ISBLANK ( fact_EPA[職級] ) )
+
+// 評量覆蓋率:(人 × 期間)應有 12 項 EPA,實際有評到幾項
+評量覆蓋率 =
+VAR done     = COUNTROWS ( SUMMARIZE ( fact_EPA, fact_EPA[姓名], fact_EPA[期間序號], fact_EPA[EPA編號] ) )
+VAR expected = COUNTROWS ( SUMMARIZE ( fact_EPA, fact_EPA[姓名], fact_EPA[期間序號] ) ) * 12
+RETURN DIVIDE ( done, expected )

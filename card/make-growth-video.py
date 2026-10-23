@@ -97,22 +97,41 @@ def photo_scene(photo, kicker, caption, title, body, dur, tape=0, finale=False):
         return img
     return dur, frame
 
+# ---------- 依文字量計算停留時間 ----------
+# 停留秒數 = 看畫面的基本時間 + 字數 ÷ 閱讀速度。
+# 每秒 5 字（約每分鐘 300 字）偏慢，讓孩子和長輩一起看也來得及讀完；
+# 標點和空白不算字數。
+RATE, BASE = 5.0, 3.0
+def chars(*texts):
+    return sum(1 for t in texts for c in t if c.isalnum())
+def read_time(*texts, base=BASE, minimum=5.0):
+    return round(max(minimum, base + chars(*texts) / RATE), 1)
+plan = []                                           # (場景名稱, 字數, 秒數)
+def add(name, scene_fn, texts, **kw):
+    dur = read_time(*texts, **kw); plan.append((name, chars(*texts), dur)); scenes.append(scene_fn(dur))
+
 # ---------- 場景清單（依卡片頁序） ----------
-scenes = [slide_scene(1, 6)]
+scenes = []
+pics, texts = slide_parts(0)
+add('封面', lambda d: slide_scene(1, d), texts)
 chapters = [(1, '第一章 · 相信自己'), (2, '第二章 · 肯定自己'), (3, '第三章 · 戰勝自己')]
 for si, kicker in chapters:
     pics, texts = slide_parts(si)
     # 文字順序：章/標題/引言，然後每張照片：日期、分類、標題、內文，最後一行是底部金句
     items = [texts[3:7], texts[7:11]]
-    scenes.append(slide_scene(si + 1, 4.5))
+    # 章節頁的照片文字稍後會一張張放大，所以這裡只算章名、引言和底部金句
+    add(kicker.split(' · ')[0] + '頁', lambda d, n=si + 1: slide_scene(n, d), texts[:3] + texts[-1:])
     for k, (pic, it) in enumerate(zip(pics, items)):
-        scenes.append(photo_scene(pic, kicker, it[0], it[2], it[3], 6.5, tape=k))
+        add(it[2], lambda d, pic=pic, it=it, k=k: photo_scene(pic, kicker, it[0], it[2], it[3], d, tape=k), [it[0], it[2], it[3]])
 pics, texts = slide_parts(4)                       # 鋼琴頁
-scenes.append(photo_scene(pics[0], '第三章 · 戰勝自己', texts[1], texts[3], texts[4], 7, tape=2))
-pics, texts = slide_parts(5)                       # 最後一頁
-scenes.append(photo_scene(pics[0], '最後一頁', texts[1], texts[2], texts[3].replace('\n', ''), 9, tape=1, finale=True))
-scenes.append(slide_scene(7, 18))                  # 信：留足夠的閱讀時間
-scenes.append(slide_scene(8, 6))
+add(texts[3], lambda d: photo_scene(pics[0], '第三章 · 戰勝自己', texts[1], texts[3], texts[4], d, tape=2), [texts[1], texts[3], texts[4]])
+pics5, texts5 = slide_parts(5)                     # 最後一頁
+add('最後一頁', lambda d: photo_scene(pics5[0], '最後一頁', texts5[1], texts5[2], texts5[3].replace('\n', ''), d, tape=1, finale=True), texts5[1:4], base=4)
+pics, texts = slide_parts(6)                       # 信
+add('爸媽的信', lambda d: slide_scene(7, d), texts, base=4)
+pics, texts = slide_parts(7)
+add('封底', lambda d: slide_scene(8, d), texts, minimum=6)
+for name, n, d in plan: print(f'{name:<12}{n:>4} 字 {d:>6.1f} 秒')
 
 total = sum(d for d, _ in scenes) - XF * (len(scenes) - 1)
 print(f'{len(scenes)} 個場景，總長約 {total:.1f} 秒')

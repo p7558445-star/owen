@@ -13,11 +13,12 @@ body { font-family: 'Noto Sans TC', sans-serif; color: var(--ink); background: v
 .body { padding: 2.6mm 4mm 2mm; display: flex; flex-direction: column; flex: 1; gap: 1.3mm; }
 h2 { font-size: 19pt; font-weight: 900; line-height: 1.1; color: var(--c); }
 .sci { font-style: italic; font-size: 8pt; color: var(--muted); margin-top: -0.8mm; }
-dl { display: grid; grid-template-columns: 7mm 1fr; gap: 0.7mm 1.5mm; font-size: 9.5pt; line-height: 1.35; }
-dt { background: var(--c); color: #fff; font-weight: 700; text-align: center; border-radius: 1.2mm; font-size: 8.5pt; height: fit-content; padding: 0.2mm 0; }
-dd { margin: 0; }
-.tip, .use { font-size: 9pt; line-height: 1.45; }
-.tip b, .use b { display: inline-block; font-size: 7.5pt; color: var(--c); border: 0.3mm solid var(--c);
+.nophoto { position: absolute; right: 3mm; top: 3mm; background: #fff8d6; color: #7a5a00; font-weight: 700;
+           font-size: 7.5pt; padding: 0.8mm 2.4mm; border-radius: 10mm; box-shadow: 0 0.5mm 1.5mm rgba(0,0,0,.25); }
+.pg { float: right; font-style: normal; }
+.point, .tip { font-size: 9.6pt; line-height: 1.5; }
+.point { font-weight: 500; }
+.point b, .tip b { display: inline-block; font-size: 7.5pt; color: var(--c); border: 0.3mm solid var(--c);
                  border-radius: 1mm; padding: 0 1mm; margin-right: 1.2mm; }
 .credit { margin-top: auto; font-size: 5.8pt; color: var(--muted); }
 

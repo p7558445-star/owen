@@ -158,40 +158,35 @@ t('overdue: notified but no intervention', () => {
 });
 
 // ── 健康 888
-t('888 cascade: identify by 2 sessions, join by visit, counsel by rx, control by latest BP', () => {
-  const db = db0();
-  const { episode: ep } = add(db, D(1), { sbp: 150, dbp: 85 });
-  let c = E.cascade888(db, D(2)).domains.htn;
-  assert.equal(c.identified, 0, 'single abnormal session is not enough');
-  add(db, D(3), { sbp: 152, dbp: 88 });
-  c = E.cascade888(db, D(4)).domains.htn;
-  assert.equal(c.identified, 1); assert.equal(c.ids.notJoined.length, 1);
-  E.act(db, ep.id, 'notify', {}, D(4)); E.act(db, ep.id, 'intervene', { rx: 'x' }, D(5));
-  c = E.cascade888(db, D(6)).domains.htn;
-  assert.equal(c.ids.notJoined.length, 1, 'rx alone does not mean joined');
-  E.act(db, ep.id, 'confirm', { visitDate: '2026-01-10' }, D(10));
-  c = E.cascade888(db, D(11)).domains.htn;
-  assert.equal(c.joined.k, 1); assert.equal(c.counselled.k, 1); assert.equal(c.ids.notControlled.length, 1);
-  add(db, D(20), { sbp: 125, dbp: 75 });
-  c = E.cascade888(db, D(21)).domains.htn;
-  assert.equal(c.controlled.k, 1); assert.equal(c.overall.p, 1);
+t('888 find: registered vs measured at least once', () => {
+  const db = db0(); db.persons.push({ id: 'p2', name: 'B', sex: 'F', birth: '1950-01-01' });
+  add(db, D(1), { sbp: 120, dbp: 70 });
+  const c = E.cascade888(db, D(2));
+  assert.equal(c.find.k, 1); assert.equal(c.find.n, 2); assert.deepEqual(c.ids.unscreened, ['p2']); assert.equal(c.find.need, 1);
 });
-t('888: med flag + careNet + manual counsel, control needs recent data', () => {
+t('888 intervene/control: denominators by highest level, numerator by entering management', () => {
   const db = db0();
-  Object.assign(db.persons[0], { medDM: true, careNet: { dm: true }, counsel: [{ at: D(2), domains: ['dm'] }] });
-  let c = E.cascade888(db, D(3)).domains.dm;
-  assert.equal(c.counselled.k, 1); assert.equal(c.ids.noData.length, 1);
-  db.measurements.push({ id: 'a', personId: 'p1', at: D(4), hba1c: 6.8, glucose: 190, glucoseType: '飯後' });
-  c = E.cascade888(db, D(5)).domains.dm;
-  assert.equal(c.controlled.k, 1, 'HbA1c takes priority over glucose');
-  c = E.cascade888(db, '2026-12-31T00:00:00').domains.dm;
-  assert.equal(c.ids.noData.length, 1, 'data older than 180 days is not usable');
+  const { episode: ep } = add(db, D(1), { sbp: 150, dbp: 85 }); // 橙
+  let c = E.cascade888(db, D(2));
+  assert.equal(c.intervene.n, 1, 'orange counts in the yellow-or-above denominator');
+  assert.equal(c.control.n, 1); assert.equal(c.control.k, 0, 'pending is not yet in management');
+  E.act(db, ep.id, 'notify', {}, D(3));
+  c = E.cascade888(db, D(4));
+  assert.equal(c.intervene.k, 1); assert.equal(c.control.k, 1);
+  c = E.cascade888(db, D(4), { entry: 'intervened' });
+  assert.equal(c.control.k, 0, 'stricter entry definition');
 });
-t('888 need-to-80%', () => {
-  const db = { persons: [], measurements: [], episodes: [] };
-  for (let i = 0; i < 10; i++) db.persons.push({ id: 'q' + i, sex: 'F', birth: '1950-01-01', medHTN: true, careNet: i < 6 ? { htn: true } : null });
-  const c = E.cascade888(db, D(5)).domains.htn;
-  assert.equal(c.identified, 10); assert.equal(c.joined.k, 6); assert.equal(c.need.joined, 2);
+t('888: yellow-only person is not in the orange denominator', () => {
+  const db = db0();
+  add(db, D(1), { sbp: 135, dbp: 70 });
+  const c = E.cascade888(db, D(2));
+  assert.equal(c.intervene.n, 1); assert.equal(c.control.n, 0); assert.equal(c.control.p, null);
+});
+t('888: same-session retest back to green is not counted as yellow', () => {
+  const db = db0();
+  add(db, D(1, 9), { temp: 37.4 });
+  add(db, new Date(new Date(D(1, 9)).getTime() + 30 * 60000).toISOString(), { temp: 36.8 });
+  assert.equal(E.cascade888(db, D(2)).intervene.n, 0);
 });
 
 // ── 統計

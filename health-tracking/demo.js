@@ -49,13 +49,12 @@
           bmi: R.n(23.4, 2.8), bf: sex === 'M' ? R.n(19, 3.5) : R.n(28.5, 3.5),
         };
         p.medHTN = B.sbp > 145 && R() < 0.6; p.medDM = B.fpg > 125 && R() < 0.6; p.medLipid = B.ldl > 150 && R() < 0.4;
-        p.careNet = { htn: p.medHTN && R() < 0.5, dm: p.medDM && R() < 0.6, lipid: p.medLipid && R() < 0.3 };
-        if ((p.medHTN || p.medDM) && R() < 0.25) p.counsel = [{ at: new Date(end.getTime() - R.int(20, 200) * DAY).toISOString(), by: '個管師 甲', domains: ['htn', 'dm', 'lipid'], note: '減鹽、規律運動、按時服藥' }];
         db.persons.push(p);
 
         let t = new Date(end.getTime() - R.int(30, 270) * DAY);
         t.setHours(R.int(8, 11), R.int(0, 59), 0, 0);
         let improve = 0;
+        if (R() < 0.15) t = end; // 已建檔但從未到站量測
         while (t < end) {
           // 一個場次
           const sx = [];
@@ -77,7 +76,6 @@
           m.glucose = Math.round(g + R.n(0, 10)); m.glucoseType = gType;
           if (R() < 0.35) { m.ldl = Math.round(B.ldl - improve * 8 + R.n(0, 8)); m.tg = Math.round(B.tg * Math.exp(R.n(0, 0.12))); m.hdl = Math.round(B.hdl + R.n(0, 3)); }
           if (spike && R() < 0.3) sx.push('severe_headache');
-          if (p.medDM && R() < 0.3) m.hba1c = r1(Math.max(5.6, 6.2 + (B.fpg - 110) / 30 - improve * 0.2 + R.n(0, 0.3)));
           db.measurements.push(m);
           // 血氧或體溫偏差時，現場重測
           if (m.spo2 <= 94 || (m.temp >= 37.1 && m.temp < 38)) {
@@ -99,12 +97,13 @@
       const ms = (byPerson[p.id] || []).sort((a, b) => new Date(a.at) - new Date(b.at));
       const nurse = NURSES[db.persons.indexOf(p) % NURSES.length];
       const stall = R() < 0.1; // 少數個案停在已通知，供未閉環指標展示
+      const ignore = R() < 0.1; // 少數個案從未被派案
       for (let i = 0; i < ms.length; i++) {
         db.measurements.push(ms[i]);
         E.ingest(db, p.id, ms[i].at);
         const nextAt = i + 1 < ms.length ? new Date(ms[i + 1].at) : end;
         if (i + 1 < ms.length && new Date(ms[i + 1].at) - new Date(ms[i].at) < 3600000) continue; // 同場次重測尚未結束
-        simulate(db, p, nurse, new Date(ms[i].at), nextAt, end, R, stall);
+        simulate(db, p, nurse, new Date(ms[i].at), nextAt, end, R, stall, ignore);
       }
     }
     void all;
@@ -112,7 +111,7 @@
     return db;
   }
 
-  function simulate(db, p, nurse, from, until, end, R, stall) {
+  function simulate(db, p, nurse, from, until, end, R, stall, ignore) {
     for (let guard = 0; guard < 8; guard++) {
       const ep = db.episodes.find((e) => e.personId === p.id && e.state !== 'judged');
       if (!ep) return;
@@ -121,7 +120,7 @@
       let at, action, payload = {};
       const L = ep.level;
       switch (ep.state) {
-        case 'pending': at = L === 'red' ? lag(0, R() < 0.85 ? 0.2 : 1.5) : L === 'orange' ? lag(0, 6) : lag(1, 20); action = 'notify'; payload = { method: R.pick(['電話', '電話', 'App 推播', '現場']), assignee: nurse }; break;
+        case 'pending': if (ignore) return; at = L === 'red' ? lag(0, R() < 0.85 ? 0.2 : 1.5) : L === 'orange' ? lag(0, 6) : lag(1, 20); action = 'notify'; payload = { method: R.pick(['電話', '電話', 'App 推播', '現場']), assignee: nurse }; break;
         case 'notified': if (stall) return; at = L === 'red' ? lag(0, R() < 0.8 ? 0.2 : 2) : L === 'orange' ? lag(0, 5) : lag(3, 60); action = 'intervene'; payload = { rx: E.prescription(p, ep) }; break;
         case 'intervened': at = L === 'red' ? lag(0, R() < 0.85 ? 0.8 : 3) : L === 'orange' ? (R() < 0.75 ? lag(5, 18) : lag(30, 50)) : lag(5, 70); action = 'confirm';
           payload = { visitDate: at.toISOString().slice(0, 10), facility: R.pick(['彰基本院', '鹿基', '社區診所', '家醫科診所']), result: R.pick(['已就醫，追蹤中', '開始用藥', '調整用藥', '醫師建議觀察']) }; break;

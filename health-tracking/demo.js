@@ -49,6 +49,8 @@
           bmi: R.n(23.4, 2.8), bf: sex === 'M' ? R.n(19, 3.5) : R.n(28.5, 3.5),
         };
         p.medHTN = B.sbp > 145 && R() < 0.6; p.medDM = B.fpg > 125 && R() < 0.6; p.medLipid = B.ldl > 150 && R() < 0.4;
+        p.careNet = { htn: p.medHTN && R() < 0.5, dm: p.medDM && R() < 0.6, lipid: p.medLipid && R() < 0.3 };
+        if ((p.medHTN || p.medDM) && R() < 0.25) p.counsel = [{ at: new Date(end.getTime() - R.int(20, 200) * DAY).toISOString(), by: '個管師 甲', domains: ['htn', 'dm', 'lipid'], note: '減鹽、規律運動、按時服藥' }];
         db.persons.push(p);
 
         let t = new Date(end.getTime() - R.int(30, 270) * DAY);
@@ -75,6 +77,7 @@
           m.glucose = Math.round(g + R.n(0, 10)); m.glucoseType = gType;
           if (R() < 0.35) { m.ldl = Math.round(B.ldl - improve * 8 + R.n(0, 8)); m.tg = Math.round(B.tg * Math.exp(R.n(0, 0.12))); m.hdl = Math.round(B.hdl + R.n(0, 3)); }
           if (spike && R() < 0.3) sx.push('severe_headache');
+          if (p.medDM && R() < 0.3) m.hba1c = r1(Math.max(5.6, 6.2 + (B.fpg - 110) / 30 - improve * 0.2 + R.n(0, 0.3)));
           db.measurements.push(m);
           // 血氧或體溫偏差時，現場重測
           if (m.spo2 <= 94 || (m.temp >= 37.1 && m.temp < 38)) {

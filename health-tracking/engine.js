@@ -790,9 +790,95 @@
   function maskId(id) { return id ? id.slice(0, 2) + '****' + id.slice(-4) : '—'; }
   function maskName(n) { if (!n) return ''; const a = [...n]; return a.length <= 2 ? a[0] + 'Ｏ' : a[0] + 'Ｏ'.repeat(a.length - 2) + a[a.length - 1]; }
 
+  // ───────────────────────── 健康 888（三高防治 888 計畫） ─────────────────────────
+  // 國家目標：8 成三高個案加入照護網 → 其中 8 成接受生活型態諮詢 → 其中 8 成控制良好（整體 0.8³ = 51.2%）。
+  // 官方的「控制良好」數值與社區端的納入定義未見公開明文，以下皆為可調參數。
+  const DEFAULT_888 = {
+    lookbackDays: 365,        // 找出／介入的觀察期
+    recentDays: 180,          // 判斷控制所需的最近量測期限
+    minAbnormalSessions: 2,   // 社區量測需 ≥2 個場次達橙層以上才算「找出」（降低單次量測偽陽性）
+    bp: { sbp: 130, dbp: 80 },
+    hba1c: 7,                 // 有 HbA1c 時優先使用
+    fpg: 130,                 // 無 HbA1c 時：空腹血糖 70–<130
+    nonFasting: 180,          // 無 HbA1c 時：飯後／隨機血糖 70–<180
+    ldl: 100,
+  };
+  const DOMAINS_888 = [
+    { key: 'htn', label: '高血壓', item: 'bp', med: 'medHTN' },
+    { key: 'dm', label: '高血糖', item: 'glucose', med: 'medDM' },
+    { key: 'lipid', label: '高血脂', item: 'lipid', med: 'medLipid' },
+  ];
+
+  function controlled888(domain, ms, o, t) {
+    const recent = addDays(t, -o.recentDays);
+    const last = (f, pred) => ms.filter((m) => num(m[f]) !== null && new Date(m.at) >= recent && new Date(m.at) <= t && (!pred || pred(m))).pop();
+    if (domain === 'htn') {
+      const m = last('sbp'); if (!m) return null;
+      return num(m.sbp) < o.bp.sbp && num(m.dbp) < o.bp.dbp;
+    }
+    if (domain === 'dm') {
+      const a = last('hba1c'); if (a) return num(a.hba1c) < o.hba1c;
+      const g = last('glucose'); if (!g) return null;
+      const x = num(g.glucose);
+      return x >= 70 && x < (normGluType(g.glucoseType) === 'fasting' ? o.fpg : o.nonFasting);
+    }
+    const l = last('ldl'); if (!l) return null;
+    return num(l.ldl) < o.ldl;
+  }
+
+  /**
+   * 健康 888 照護串聯（cascade）。filter(person) 用於據點篩選。
+   * 回傳 screened（篩檢涵蓋率）與各疾病別：找出人數、入網率、諮詢率、控制率、整體達標率、各缺口名單。
+   */
+  function cascade888(db, now, opts, filter) {
+    const o = Object.assign({}, DEFAULT_888, opts || {}, { bp: Object.assign({}, DEFAULT_888.bp, (opts && opts.bp) || {}) });
+    const t = new Date(now || Date.now()), since = addDays(t, -o.lookbackDays);
+    const inWin = (iso) => iso && new Date(iso) >= since && new Date(iso) <= t;
+    const persons = db.persons.filter((p) => !filter || filter(p));
+    const mBy = new Map(), eBy = new Map();
+    for (const m of db.measurements) { if (!mBy.has(m.personId)) mBy.set(m.personId, []); mBy.get(m.personId).push(m); }
+    for (const e of db.episodes) { if (!eBy.has(e.personId)) eBy.set(e.personId, []); eBy.get(e.personId).push(e); }
+    const rows = persons.map((p) => {
+      const ms = (mBy.get(p.id) || []).slice().sort((a, b) => new Date(a.at) - new Date(b.at));
+      const evs = groupSessions(ms).filter((s) => inWin(s.at)).map((s) => evaluateSession(personCtx(p, s.at), s.readings));
+      return { p, ms, evs, eps: eBy.get(p.id) || [] };
+    });
+    const screened = rows.filter((r) => r.evs.some((ev) => ev.items.bp || ev.items.glucose || ev.items.lipid)).length;
+    const out = { screened: wilson(screened, persons.length), unscreened: rows.filter((r) => !r.evs.some((ev) => ev.items.bp || ev.items.glucose || ev.items.lipid)).map((r) => r.p.id), domains: {}, opts: o };
+    for (const d of DOMAINS_888) {
+      const ids = { identified: [], notJoined: [], notCounselled: [], notControlled: [], noData: [], controlled: [] };
+      let j = 0, c = 0, k = 0;
+      for (const r of rows) {
+        const abn = r.evs.filter((ev) => ev.items[d.item] && RANK[ev.items[d.item].level] >= 2).length;
+        const a1c = d.key === 'dm' && r.ms.some((m) => num(m.hba1c) !== null && num(m.hba1c) >= 6.5 && inWin(m.at));
+        if (!(r.p[d.med] || abn >= o.minAbnormalSessions || a1c)) continue;
+        ids.identified.push(r.p.id);
+        const touches = (e) => e.items.some((i) => i.key === d.item);
+        const joined = !!(r.p.careNet && r.p.careNet[d.key]) || r.eps.some((e) => touches(e) && ((e.confirm && e.confirm.type === 'visit' && inWin(e.confirm.at)) || (e.judge && e.judge.reason === '已轉由醫師持續管理' && inWin(e.judge.at))));
+        if (!joined) { ids.notJoined.push(r.p.id); continue; }
+        j++;
+        const counselled = r.eps.some((e) => e.rx && inWin(e.rx.at) && (touches(e) || e.items.some((i) => i.key === 'mets'))) || (r.p.counsel || []).some((x) => inWin(x.at) && (!x.domains || x.domains.includes(d.key)));
+        if (!counselled) { ids.notCounselled.push(r.p.id); continue; }
+        c++;
+        const ok = controlled888(d.key, r.ms, o, t);
+        if (ok === null) { ids.noData.push(r.p.id); continue; }
+        if (ok) { k++; ids.controlled.push(r.p.id); } else ids.notControlled.push(r.p.id);
+      }
+      const n = ids.identified.length;
+      const need = (x, den) => Math.max(0, Math.ceil(0.8 * den - 1e-9) - x);
+      out.domains[d.key] = {
+        label: d.label, identified: n,
+        joined: wilson(j, n), counselled: wilson(c, j), controlled: wilson(k, c), overall: wilson(k, n),
+        need: { joined: need(j, n), counselled: need(c, j), controlled: need(k, c) },
+        ids,
+      };
+    }
+    return out;
+  }
+
   const Engine = {
     LEVELS, RANK, LEVEL_LABEL, LEVEL_MEANING, ITEMS, ITEM_LABEL, SYMPTOMS, SYMPTOM_BY_LABEL, ASSUMPTIONS, DEFAULT_SLA, CLOSE_REASONS,
-    STATES, STATE_LABEL, OUTCOME_LABEL, GLU_TYPE, RX,
+    STATES, STATE_LABEL, OUTCOME_LABEL, GLU_TYPE, RX, DEFAULT_888, DOMAINS_888, cascade888,
     maxLevel, evaluateSession, groupSessions, ingest, act, nextStep, suggestJudgement, quality, wilson, prescription,
     parseRoster, parseBirth, validTwId, maskId, maskName, ageAt, addDays, sameDay, normGluType, uid,
   };

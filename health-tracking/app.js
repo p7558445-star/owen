@@ -30,6 +30,7 @@
     try { localStorage.setItem(KEY, JSON.stringify(db)); return true; }
     catch (e) { toast('無法儲存到瀏覽器（空間不足或已停用），請先匯出備份'); return false; }
   }
+  const t888 = () => { const x = (db.settings && db.settings.t888) || {}; return Object.assign({}, E.DEFAULT_888, x, { bp: Object.assign({}, E.DEFAULT_888.bp, x.bp || {}) }); };
   const sla = () => Object.assign({}, E.DEFAULT_SLA, (db.settings && db.settings.sla) || {});
   const nurses = () => (db.settings && db.settings.nurses && db.settings.nurses.length ? db.settings.nurses : ['個管師']);
 
@@ -140,7 +141,7 @@
 
   // ───────────── 外框 ─────────────
   const ROUTES = [
-    ['dashboard', '總覽'], ['worklist', '追蹤工作清單'], ['residents', '民眾名冊'], ['quality', '品質指標'], ['import', '資料匯入'], ['rules', '分層規則與設定'],
+    ['dashboard', '總覽'], ['worklist', '追蹤工作清單'], ['residents', '民眾名冊'], ['quality', '品質指標'], ['888', '健康888'], ['import', '資料匯入'], ['rules', '分層規則與設定'],
   ];
   function shell() {
     const sites = [...new Set(db.persons.map((p) => p.site))].sort();
@@ -159,7 +160,7 @@
     const [route, arg] = (location.hash.slice(2) || 'dashboard').split('/');
     const app = $('#app');
     const banner = db.demo ? `<div class="banner no-print">目前顯示的是<strong>虛構示範資料</strong>（${db.persons.length} 位合成民眾），用來展示分層與閉環流程。正式使用請到「資料匯入」清除示範資料並匯入名冊。</div>` : '';
-    const views = { dashboard, worklist, residents, p: caseView, quality: qualityView, import: importView, rules: rulesView };
+    const views = { dashboard, worklist, residents, p: caseView, quality: qualityView, 888: view888, import: importView, rules: rulesView };
     app.innerHTML = banner + (views[route] || dashboard)(arg);
     (bind[route] || (() => {}))(arg);
     saveUI();
@@ -327,6 +328,10 @@
           <div class="chips">${flags.map(([k, t]) => `<label class="chip" style="cursor:pointer"><input type="checkbox" data-flag="${k}" ${p[k] ? 'checked' : ''} style="margin-right:4px">${t}</label>`).join('')}</div>
           ${p.copd ? `<label class="f" style="margin-top:8px">慢性肺病個人血氧基線（%）<input type="number" id="spo2-base" value="${p.spo2Baseline ?? ''}" min="80" max="100"></label>` : ''}
           <p class="small muted">已服藥者於代謝症候群該項視為符合；高齡（≥65）、免疫低下、慢性病者發燒須當日就醫。</p>
+          <h3 style="margin-top:12px">健康888：已加入醫師三高照護網</h3>
+          <div class="chips">${E.DOMAINS_888.map((d) => `<label class="chip"><input type="checkbox" data-care="${d.key}" ${p.careNet && p.careNet[d.key] ? 'checked' : ''} style="margin-right:4px">${d.label}</label>`).join('')}</div>
+          <p class="small muted">例如已收案於健保三高／糖尿病共照、代謝症候群防治計畫，或由固定醫師追蹤。轉介就醫並確認就醫者，系統會自動視為已入網。</p>
+          <div class="row" style="margin-top:6px"><button class="btn sm" type="button" id="counsel-btn">記錄生活型態諮詢</button><span class="small muted">${(p.counsel || []).length ? '最近：' + fmtD(p.counsel[p.counsel.length - 1].at) : '開立健康處方即自動計入'}</span></div>
         </div>
         <div class="card"><h2>追蹤週期紀錄</h2>
           ${past.length ? past.map((e) => `<details style="margin-bottom:6px"><summary>${lv(e.initialLevel)} 第 ${e.cycle} 週期・${fmtD(e.detectedAt)}・${E.OUTCOME_LABEL[e.judge.outcome]}${e.judge.reason ? '（' + esc(e.judge.reason) + '）' : ''}</summary>${timeline(e)}${e.rx ? `<div class="rx small" style="margin-top:6px">${esc(e.rx.text)}</div>` : ''}</details>`).join('') : '<p class="muted small">尚無已判定的週期</p>'}
@@ -403,14 +408,14 @@
         <label class="f">心律旗標<select name="arr"><option value="">無</option><option value="Y">ARR／疑似房顫</option></select></label>
         ${n('spo2', '血氧 %')}${n('temp', '體溫 ℃', 0.1)}${n('glucose', '血糖')}
         <label class="f">血糖類型<select name="glucoseType"><option>空腹</option><option>飯後</option><option selected>隨機</option></select></label>
-        ${n('ldl', 'LDL')}${n('tg', '三酸甘油脂')}${n('hdl', 'HDL')}${n('tc', '總膽固醇')}${n('ua', '尿酸', 0.1)}${n('weight', '體重 kg', 0.1)}${n('waist', '腰圍 cm', 0.1)}${n('bodyFat', '體脂 %', 0.1)}
+        ${n('ldl', 'LDL')}${n('tg', '三酸甘油脂')}${n('hdl', 'HDL')}${n('tc', '總膽固醇')}${n('ua', '尿酸', 0.1)}${n('weight', '體重 kg', 0.1)}${n('waist', '腰圍 cm', 0.1)}${n('bodyFat', '體脂 %', 0.1)}${n('hba1c', 'HbA1c %（抽血）', 0.1)}
       </div>
       <h3 style="margin-top:12px">症狀</h3><div class="chips">${Object.entries(E.SYMPTOMS).map(([k, v]) => `<label class="chip"><input type="checkbox" name="sx" value="${k}" style="margin-right:4px">${v}</label>`).join('')}</div>
       <p class="small muted">同一場次（60 分鐘內）的重測會合併判定；例如血氧 91–94 需重測 2 次。</p>`,
     [{ label: '取消' }, { label: '儲存並判定', primary: true, onClick: (b) => {
       const fd = new FormData($('#dlg-form'));
       const m = { id: E.uid('m'), personId: p.id, at: new Date(fd.get('at')).toISOString(), source: 'manual', symptoms: fd.getAll('sx') };
-      for (const k of ['sbp', 'dbp', 'pulse', 'spo2', 'temp', 'glucose', 'ldl', 'tg', 'hdl', 'tc', 'ua', 'weight', 'waist', 'bodyFat']) { const v = fd.get(k); if (v !== '' && v !== null) m[k] = +v; }
+      for (const k of ['sbp', 'dbp', 'pulse', 'spo2', 'temp', 'glucose', 'ldl', 'tg', 'hdl', 'tc', 'ua', 'weight', 'waist', 'bodyFat', 'hba1c']) { const v = fd.get(k); if (v !== '' && v !== null) m[k] = +v; }
       if (fd.get('arr')) m.arr = true;
       if (m.glucose !== undefined) m.glucoseType = fd.get('glucoseType');
       if (Object.keys(m).length <= 5 && !m.arr) throw new Error('請至少輸入一項數值');
@@ -458,9 +463,71 @@
     <p class="small muted">95% 信賴區間採 Wilson score 法。各據點分母多半很小（常 &lt;30），區間很寬，跨據點排名請看區間是否重疊，不要只比點估計。</p></div>`;
   }
 
+  // ───────────── 健康 888 ─────────────
+  const GAPS = {
+    notJoined: ['已找出、未入網', '轉介就醫並確認；若已有固定醫師或已收案共照，於個案頁勾選「已加入照護網」'],
+    notCounselled: ['已入網、未接受生活型態諮詢', '開立健康處方，或於個案頁「記錄生活型態諮詢」'],
+    notControlled: ['已諮詢、未達控制', '回診調藥、強化飲食運動處方，3 個月內複測'],
+    noData: ['已諮詢、近期無量測', '邀請回健康站量測，或補登抽血 HbA1c／LDL'],
+  };
+  function median(xs) { if (!xs.length) return null; const a = xs.slice().sort((x, y) => x - y), m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; }
+  function q1q3(xs) { if (xs.length < 4) return null; const a = xs.slice().sort((x, y) => x - y), q = (p) => { const i = (a.length - 1) * p, lo = Math.floor(i); return a[lo] + (a[Math.ceil(i)] - a[lo]) * (i - lo); }; return [q(0.25), q(0.75)]; }
+
+  function view888() {
+    const now = new Date(), o = t888();
+    const c = E.cascade888(db, now, o, inSite);
+    const q = E.quality(db, now, o.lookbackDays, (e) => inSite(IX.byPerson.get(e.personId)));
+    const lag = db.episodes.filter((e) => inSite(IX.byPerson.get(e.personId)) && e.intervene && new Date(e.detectedAt) >= E.addDays(now, -o.lookbackDays)).map((e) => (new Date(e.intervene.at) - new Date(e.detectedAt)) / 864e5);
+    const med = median(lag), iqr = q1q3(lag);
+    const g = Object.assign({ d: 'htn', gap: 'notJoined' }, ui.g888);
+    const D = c.domains;
+    const stage = (label, w, n0, need, prevLabel) => {
+      const k = w.k, n = w.n;
+      const width = n0 ? (k / n0) * 100 : 0, tick = n0 ? (0.8 * n / n0) * 100 : 0;
+      return `<div class="bar-row" style="grid-template-columns:72px minmax(0,1fr) 128px"><span>${label}</span>
+        <div style="position:relative;height:14px"><div class="seg neutral" style="width:${Math.max(width, k ? 1 : 0)}%;height:14px;border-radius:4px" data-tip="${esc(`${label} ${k} 人／${prevLabel} ${n} 人`)}"></div>${n ? `<div style="position:absolute;top:-3px;left:${tick}%;width:2px;height:20px;background:var(--ink)" data-tip="${esc(`80% 目標：${Math.ceil(0.8 * n - 1e-9)} 人`)}"></div>` : ''}</div>
+        <span class="small tnum" style="text-align:right"><strong>${pct(w)}</strong> ${k}/${n}<br><span class="${need ? 'overdue' : 'muted'}">${n ? (need ? `差 ${need} 人達 80%` : '✓ 已達 80%') : '—'}</span></span></div>`;
+    };
+    const card = (d) => `<div class="card"><div class="row spread"><h2 style="margin:0">${d.label}</h2><span class="small muted">找出 ${d.identified} 人</span></div>
+      <div style="margin-top:10px">${stage('入網', d.joined, d.identified, d.need.joined, '找出')}${stage('諮詢', d.counselled, d.identified, d.need.counselled, '入網')}${stage('達標', d.controlled, d.identified, d.need.controlled, '諮詢')}</div>
+      <p class="small" style="margin:8px 0 0">整體達標（達標／找出）：<strong>${pct(d.overall)}</strong> <span class="muted">${d.overall.k}/${d.overall.n}　目標 51.2%</span></p>
+      <p class="small muted" style="margin:2px 0 0">${['joined', 'counselled', 'controlled'].map((k, i) => `${['入網', '諮詢', '達標'][i]} ${ci(d[k]) || '—'}`).join('<br>')}</p></div>`;
+    const rows = (D[g.d].ids[g.gap] || []).map((id) => IX.byPerson.get(id)).filter(Boolean);
+    const val = (w) => `${pct(w)} <span class="muted">${w.k}/${w.n}</span>`;
+    const ind = [
+      ['找出', '三高個案加入照護網率（入網／找出）', `高血壓 ${val(D.htn.joined)}<br>高血糖 ${val(D.dm.joined)}<br>高血脂 ${val(D.lipid.joined)}`,
+        [['篩檢涵蓋率（12 個月內量過三高項目／名冊）', val(c.screened)], ['橙層就醫確認率（4 週內）', val(q.orangeConfirm)]]],
+      ['介入', '入網者接受生活型態諮詢率（諮詢／入網）', `高血壓 ${val(D.htn.counselled)}<br>高血糖 ${val(D.dm.counselled)}<br>高血脂 ${val(D.lipid.counselled)}`,
+        [['紅層當日處理率', val(q.redSameDay)], ['偵測到介入天數（中位數 [IQR]）', med === null ? '—' : `${med.toFixed(1)} 天${iqr ? ` [${iqr[0].toFixed(1)}–${iqr[1].toFixed(1)}]` : ''}　n=${lag.length}`]]],
+      ['達標', '諮詢者控制良好率（達標／諮詢）', `高血壓 ${val(D.htn.controlled)}<br>高血糖 ${val(D.dm.controlled)}<br>高血脂 ${val(D.lipid.controlled)}`,
+        [['複測完成率', val(q.retest)], ['降級（達標）率', val(q.improve)], ['整體達標率（達標／找出，目標 51.2%）', `高血壓 ${pct(D.htn.overall)}・高血糖 ${pct(D.dm.overall)}・高血脂 ${pct(D.lipid.overall)}`]]],
+    ];
+    return `<div class="row spread"><h1>健康888（三高防治）</h1><span class="small muted">觀察期近 ${o.lookbackDays} 天・${ui.site === 'all' ? '全部據點' : esc(ui.site)}・<a href="#/rules">調整參數</a></span></div>
+    <p class="small" style="margin-top:-6px">國健署「三高防治 888」：8 成三高個案加入照護網 → 其中 8 成接受生活型態諮詢 → 其中 8 成控制良好。三段都是<strong>條件比率</strong>（分母為上一段人數），三段都達 80% 時，整體為 0.8³ = 51.2%。</p>
+    <div class="grid g3">${E.DOMAINS_888.map((d) => card(D[d.key])).join('')}</div>
+    <div class="card" style="margin-top:12px"><h2>建議指標：找出／介入／達標</h2><div class="tbl-wrap"><table class="small"><thead><tr><th>階段</th><th>主指標（888）</th><th>目前值</th><th>輔助過程指標</th><th>目前值</th></tr></thead><tbody>
+      ${ind.map(([s, main, v, sub]) => sub.map((x, i) => `<tr>${i ? '' : `<td rowspan="${sub.length}"><strong>${s}</strong></td><td rowspan="${sub.length}">${main}</td><td rowspan="${sub.length}" class="tnum">${v}</td>`}<td>${x[0]}</td><td class="tnum">${x[1]}</td></tr>`).join('')).join('')}
+    </tbody></table></div>
+    <p class="small muted">主指標對應 888 的三個 8 成；輔助指標是可每週追蹤的前導指標。主指標反映結果、變動較慢；輔助指標可及早顯示哪一段開始卡住。</p></div>
+    <div class="card" style="margin-top:12px"><div class="row spread"><h2 style="margin:0">缺口名單</h2>
+      <div class="row"><select id="g-d">${E.DOMAINS_888.map((d) => `<option value="${d.key}" ${g.d === d.key ? 'selected' : ''}>${d.label}</option>`).join('')}</select>
+      <select id="g-gap">${Object.entries(GAPS).map(([k, [t]]) => `<option value="${k}" ${g.gap === k ? 'selected' : ''}>${t}（${D[g.d].ids[k].length}）</option>`).join('')}</select>
+      <button class="btn sm" id="g-export" type="button">匯出 CSV</button></div></div>
+      <p class="small">建議動作：${GAPS[g.gap][1]}</p>
+      ${rows.length ? `<div class="tbl-wrap"><table><thead><tr><th>民眾</th><th>據點</th><th>管理層級</th><th>最近量測</th><th>用藥</th><th>追蹤階段</th></tr></thead><tbody>${rows.map((p) => { const l = IX.latest(p.id), e = IX.open.get(p.id), m = IX.mgmt(p.id); return `<tr class="click" data-href="#/p/${p.id}"><td><strong>${esc(pname(p))}</strong><div class="small muted">${esc(pid2(p))}</div></td><td class="small">${esc(p.site)}</td><td>${m === 'none' ? '<span class="lv na">未量測</span>' : lv(m)}</td><td class="small tnum">${l ? fmtD(l.session.at) : '—'}</td><td class="small">${[p.medHTN && '降壓', p.medDM && '降糖', p.medLipid && '降脂'].filter(Boolean).join('、') || '—'}</td><td class="small">${e ? E.STATE_LABEL[e.state] : '—'}</td></tr>`; }).join('')}</tbody></table></div>` : '<div class="empty">此缺口目前沒有個案</div>'}
+    </div>
+    <details class="card" style="margin-top:12px"><summary><strong>指標定義</strong></summary><ul class="small">
+      <li><strong>找出（分母）</strong>：觀察期內符合任一條件：服用該類藥物；社區量測 ≥${o.minAbnormalSessions} 個場次達橙層以上（血壓 ≥140/90、空腹 ≥126 或飯後 ≥200、LDL ≥160 或 TG ≥200）；HbA1c ≥6.5%（僅高血糖）。單次異常不計入，以降低偽陽性。</li>
+      <li><strong>入網</strong>：個案頁勾選「已加入醫師三高照護網」；或觀察期內該項目的橙／紅層已確認就醫；或以「已轉由醫師持續管理」結案。</li>
+      <li><strong>生活型態諮詢</strong>：觀察期內針對該項目（或代謝症候群）開立健康處方，或手動記錄生活型態諮詢。</li>
+      <li><strong>控制良好</strong>：最近 ${o.recentDays} 天內最後一次量測：血壓 &lt;${o.bp.sbp}/${o.bp.dbp}；HbA1c &lt;${o.hba1c}%（無 HbA1c 時以空腹血糖 70–&lt;${o.fpg} 或飯後 70–&lt;${o.nonFasting} 代替）；LDL &lt;${o.ldl}。近期無量測者不列入達標分子，另列「近期無量測」缺口。</li>
+      <li>社區設備的指尖血糖不能取代 HbA1c；LDL 目標應依心血管風險分級（例如糖尿病或已有心血管疾病者更嚴格），此處用單一門檻只是社區篩檢層級的近似。</li>
+      <li>信賴區間採 Wilson score 法。</li></ul></details>`;
+  }
+
   // ───────────── 資料匯入 ─────────────
-  const M_COLS = [['識別值', 'id'], ['量測時間', 'at'], ['收縮壓', 'sbp'], ['舒張壓', 'dbp'], ['脈搏', 'pulse'], ['心律旗標', 'arr'], ['血氧', 'spo2'], ['體溫', 'temp'], ['血糖', 'glucose'], ['血糖類型', 'glucoseType'], ['LDL', 'ldl'], ['三酸甘油脂', 'tg'], ['HDL', 'hdl'], ['總膽固醇', 'tc'], ['尿酸', 'ua'], ['體重', 'weight'], ['腰圍', 'waist'], ['體脂率', 'bodyFat'], ['症狀', 'symptoms']];
-  const ALIAS = { id: ['識別值', '身分證', '證號', '個案編號', 'id'], at: ['量測時間', '時間', '日期'], sbp: ['收縮壓', 'sbp'], dbp: ['舒張壓', 'dbp'], pulse: ['脈搏', '心率', 'pulse', 'hr'], arr: ['心律', 'arr', '房顫'], spo2: ['血氧', 'spo2'], temp: ['體溫', 'temp'], glucoseType: ['血糖類型', '血糖種類'], glucose: ['血糖', 'glucose'], ldl: ['ldl', '低密度'], tg: ['三酸甘油', 'tg'], hdl: ['hdl', '高密度'], tc: ['總膽固醇', 'tc'], ua: ['尿酸', 'ua'], weight: ['體重', 'weight'], waist: ['腰圍', 'waist'], bodyFat: ['體脂', 'fat'], symptoms: ['症狀'] };
+  const M_COLS = [['識別值', 'id'], ['量測時間', 'at'], ['收縮壓', 'sbp'], ['舒張壓', 'dbp'], ['脈搏', 'pulse'], ['心律旗標', 'arr'], ['血氧', 'spo2'], ['體溫', 'temp'], ['血糖', 'glucose'], ['血糖類型', 'glucoseType'], ['LDL', 'ldl'], ['三酸甘油脂', 'tg'], ['HDL', 'hdl'], ['總膽固醇', 'tc'], ['尿酸', 'ua'], ['體重', 'weight'], ['腰圍', 'waist'], ['體脂率', 'bodyFat'], ['HbA1c', 'hba1c'], ['症狀', 'symptoms']];
+  const ALIAS = { id: ['識別值', '身分證', '證號', '個案編號', 'id'], at: ['量測時間', '時間', '日期'], sbp: ['收縮壓', 'sbp'], dbp: ['舒張壓', 'dbp'], pulse: ['脈搏', '心率', 'pulse', 'hr'], arr: ['心律', 'arr', '房顫'], spo2: ['血氧', 'spo2'], temp: ['體溫', 'temp'], glucoseType: ['血糖類型', '血糖種類'], glucose: ['血糖', 'glucose'], ldl: ['ldl', '低密度'], tg: ['三酸甘油', 'tg'], hdl: ['hdl', '高密度'], tc: ['總膽固醇', 'tc'], ua: ['尿酸', 'ua'], weight: ['體重', 'weight'], waist: ['腰圍', 'waist'], bodyFat: ['體脂', 'fat'], hba1c: ['hba1c', '糖化'], symptoms: ['症狀'] };
   let pendingRoster = null;
 
   function importView() {
@@ -543,7 +610,7 @@
       const t = r[col.at] instanceof Date ? r[col.at] : new Date(String(r[col.at]).replace(/\//g, '-').replace(' ', 'T'));
       if (isNaN(t)) { bad++; continue; }
       const m = { id: E.uid('m'), personId: p.id, at: t.toISOString(), source: 'import' };
-      for (const k of ['sbp', 'dbp', 'pulse', 'spo2', 'temp', 'glucose', 'ldl', 'tg', 'hdl', 'tc', 'ua', 'weight', 'waist', 'bodyFat']) if (col[k] !== undefined && r[col[k]] !== '' && r[col[k]] !== null && !isNaN(+r[col[k]])) m[k] = +r[col[k]];
+      for (const k of ['sbp', 'dbp', 'pulse', 'spo2', 'temp', 'glucose', 'ldl', 'tg', 'hdl', 'tc', 'ua', 'weight', 'waist', 'bodyFat', 'hba1c']) if (col[k] !== undefined && r[col[k]] !== '' && r[col[k]] !== null && !isNaN(+r[col[k]])) m[k] = +r[col[k]];
       if (col.arr !== undefined && /^(y|yes|1|是|true|arr)/i.test(String(r[col.arr]))) m.arr = true;
       if (col.glucoseType !== undefined && m.glucose !== undefined) m.glucoseType = String(r[col.glucoseType] || '隨機');
       if (col.symptoms !== undefined && r[col.symptoms]) m.symptoms = String(r[col.symptoms]).split(/[、,，;；]/).map((s) => E.SYMPTOM_BY_LABEL[s.trim()] || null).filter(Boolean);
@@ -561,7 +628,7 @@
 
   // ───────────── 規則與設定 ─────────────
   function rulesView() {
-    const s = sla();
+    const s = sla(), t8 = t888();
     const T = [
       ['血壓（mmHg）', '收縮壓 <130 且舒張壓 <80', '收縮壓 130–139 或舒張壓 80–89', '≥140 或 ≥90', '≥180 或 ≥110；或 ≥160/100 並有胸痛、劇烈頭痛、言語不清、肢體無力'],
       ['脈搏與心律（次/分）', '60–100', '50–59（無症狀）', '<50 或 >100（休息 5–10 分鐘後重測仍異常）；設備心律旗標 ARR／疑似房顫', '<40 或 >120 持續；或合併胸痛、暈厥、呼吸困難'],
@@ -584,6 +651,19 @@
     <div class="card" style="margin-top:12px"><h2>閉環流程</h2><p>偵測 → 待派案 → 已通知 → 已介入（含健康處方）→ 已確認（就醫或完成處方）→ 已複測（紅層為就醫後電訪）→ 判定（降級、維持、升級、結案）</p>
       <ul class="small"><li>每一筆個案都必須走到「判定」，不能停在「已通知」。</li><li>新量測高於目前層級時立即升級並重新派案；達標後連續 2 次維持才降級。</li><li>慢性病不直接結案；結案原因限於：${E.CLOSE_REASONS.join('、')}（轉由醫師管理需登記回診日期）。</li></ul></div>
     <div class="card" style="margin-top:12px"><h2>系統解讀（請臨床委員會確認）</h2><ol class="small">${E.ASSUMPTIONS.map((a) => `<li>${esc(a)}</li>`).join('')}</ol></div>
+    <div class="card" style="margin-top:12px"><h2>健康888 參數</h2>
+      <p class="small muted">國健署目標為 8 成入網、8 成接受生活型態諮詢、8 成控制良好；「控制良好」的社區端數值未見公開明文，以下為預設，請依院內共識調整。</p>
+      <div class="form-grid">
+        <label class="f">控制：收縮壓 &lt;<input type="number" data-t888="bp.sbp" value="${t8.bp.sbp}"></label>
+        <label class="f">控制：舒張壓 &lt;<input type="number" data-t888="bp.dbp" value="${t8.bp.dbp}"></label>
+        <label class="f">控制：HbA1c &lt;（%）<input type="number" step="0.1" data-t888="hba1c" value="${t8.hba1c}"></label>
+        <label class="f">無 HbA1c：空腹血糖 &lt;<input type="number" data-t888="fpg" value="${t8.fpg}"></label>
+        <label class="f">無 HbA1c：飯後／隨機 &lt;<input type="number" data-t888="nonFasting" value="${t8.nonFasting}"></label>
+        <label class="f">控制：LDL &lt;<input type="number" data-t888="ldl" value="${t8.ldl}"></label>
+        <label class="f">找出：異常場次數 ≥<input type="number" min="1" data-t888="minAbnormalSessions" value="${t8.minAbnormalSessions}"></label>
+        <label class="f">觀察期（天）<input type="number" data-t888="lookbackDays" value="${t8.lookbackDays}"></label>
+        <label class="f">控制判定需最近（天）內有量測<input type="number" data-t888="recentDays" value="${t8.recentDays}"></label>
+      </div></div>
     <div class="card" style="margin-top:12px"><h2>處理時限設定（天）</h2>
       <div class="tbl-wrap"><table class="small"><thead><tr><th>節點</th><th>紅</th><th>橙</th><th>黃</th></tr></thead><tbody>
         <tr><td>派案並通知</td><td>${num('notify.red', s.notify.red)}</td><td>${num('notify.orange', s.notify.orange)}</td><td>${num('notify.yellow', s.notify.yellow)}</td></tr>
@@ -627,6 +707,9 @@
       const a2 = $('#add-m2'); if (a2) a2.onclick = () => measurementDialog(p);
       const sn = $('#show-nid'); if (sn) sn.onclick = () => { $('#nid').textContent = p.nationalId; sn.remove(); };
       $$('[data-flag]').forEach((c) => (c.onchange = () => { p[c.dataset.flag] = c.checked; save(); render(); toast('已更新風險註記；下次量測起依新註記判定'); }));
+      $$('[data-care]').forEach((c) => (c.onchange = () => { p.careNet = Object.assign({}, p.careNet, { [c.dataset.care]: c.checked }); save(); toast('已更新照護網註記'); }));
+      $('#counsel-btn').onclick = () => dialog('記錄生活型態諮詢（健康888）', `<p class="small">適用於未經異常開案、但已完成飲食、運動、戒菸酒、用藥遵從等生活型態諮詢者（例如血壓已控制的入網個案）。</p><div class="chips">${E.DOMAINS_888.map((d) => `<label class="chip"><input type="checkbox" name="dom" value="${d.key}" checked style="margin-right:4px">${d.label}</label>`).join('')}</div><label class="f" style="margin-top:8px">諮詢內容<input type="text" name="note" placeholder="例：減鹽、每週運動 150 分鐘、規律服藥"></label>`,
+        [{ label: '取消' }, { label: '儲存', primary: true, onClick: () => { const fd = new FormData($('#dlg-form')); const doms = fd.getAll('dom'); if (!doms.length) throw new Error('請至少選一項'); p.counsel = (p.counsel || []).concat({ at: nowISO(), by: ui.user, domains: doms, note: fd.get('note') || '' }); save(); render(); toast('已記錄生活型態諮詢'); } }]);
       const sb = $('#spo2-base'); if (sb) sb.onchange = () => { p.spo2Baseline = sb.value === '' ? null : +sb.value; save(); };
       $$('[data-print-rx]').forEach((b) => (b.onclick = (e) => { e.preventDefault(); const ta = $('#ep-form textarea[name=rx]'); printRx(p, ta ? Object.assign({}, ep, { rx: { text: ta.value } }) : ep); }));
       if (!ep) return;
@@ -669,11 +752,24 @@
       $('#demo-load').onclick = () => { if (!confirm('以示範資料覆蓋目前所有資料？')) return; db = window.Demo.generate(new Date()); save(); render(); };
       $('#wipe').onclick = () => { if (!confirm('清除全部資料（無法復原）？建議先匯出備份。')) return; db = { persons: [], measurements: [], episodes: [], settings: db.settings }; save(); render(); };
     },
+    888() {
+      const set = (k, v) => { ui.g888 = Object.assign({ d: 'htn', gap: 'notJoined' }, ui.g888, { [k]: v }); render(); };
+      $('#g-d').onchange = (e) => set('d', e.target.value);
+      $('#g-gap').onchange = (e) => set('gap', e.target.value);
+      $('#g-export').onclick = () => {
+        const c = E.cascade888(db, new Date(), t888(), inSite);
+        const rows = [['疾病別', '缺口', '姓名', '識別', '據點', '管理層級', '建議動作']];
+        for (const d of E.DOMAINS_888) for (const [k, [t, a]] of Object.entries(GAPS)) for (const id of c.domains[d.key].ids[k]) { const p = IX.byPerson.get(id); rows.push([d.label, t, pname(p), pid2(p), p.site, E.LEVEL_LABEL[IX.mgmt(id)] || '未量測', a]); }
+        download('健康888缺口名單.csv', csv(rows), 'text/csv');
+      };
+    },
     rules() {
       $('#save-set').onclick = () => {
         const s = JSON.parse(JSON.stringify(sla()));
         $$('[data-sla]').forEach((i) => { const [a, b] = i.dataset.sla.split('.'); const v = i.value === '' ? null : Math.max(0, +i.value); if (b) s[a][b] = v; else s[a] = v; });
-        db.settings = Object.assign({}, db.settings, { sla: s, nurses: $('#nurses').value.split(/[,，、]/).map((x) => x.trim()).filter(Boolean) });
+        const t8 = JSON.parse(JSON.stringify(t888()));
+        $$('[data-t888]').forEach((i) => { if (i.value === '') return; const [a, b] = i.dataset.t888.split('.'); if (b) t8[a][b] = +i.value; else t8[a] = +i.value; });
+        db.settings = Object.assign({}, db.settings, { t888: t8, sla: s, nurses: $('#nurses').value.split(/[,，、]/).map((x) => x.trim()).filter(Boolean) });
         save(); render(); toast('設定已儲存');
       };
       $('#mask').onchange = (e) => { ui.mask = e.target.checked; render(); };

@@ -4,3 +4,4 @@
 *.csv
 *.json
 !package.json
+*.zip

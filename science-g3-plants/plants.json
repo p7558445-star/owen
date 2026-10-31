@@ -416,7 +416,8 @@
   "id": "camphor",
   "zh": "樟樹",
   "sci": [
-   "Cinnamomum camphora"
+   "Cinnamomum camphora",
+   "Camphora officinarum"
   ],
   "sec": "2-3 植物的莖",
   "page": "p.16",
@@ -461,7 +462,7 @@
   "id": "bokchoy",
   "zh": "小白菜",
   "sci": [
-   "Brassica rapa"
+   "Brassica rapa chinensis"
   ],
   "sec": "2-4 植物的根",
   "page": "p.17",
@@ -596,7 +597,8 @@
   "id": "rose",
   "zh": "玫瑰",
   "sci": [
-   "Rosa"
+   "Rosa chinensis",
+   "Rosa × odorata"
   ],
   "sec": "2-5 植物的花",
   "page": "p.18",
@@ -809,8 +811,7 @@
   "id": "grape",
   "zh": "葡萄",
   "sci": [
-   "Vitis vinifera",
-   "Vitis"
+   "Vitis vinifera"
   ],
   "sec": "自然百寶箱・肉果",
   "page": "p.27、32",
@@ -885,7 +886,7 @@
   "id": "napa",
   "zh": "大白菜",
   "sci": [
-   "Brassica rapa"
+   "Brassica rapa pekinensis"
   ],
   "sec": "科學素養評量",
   "page": "p.32",

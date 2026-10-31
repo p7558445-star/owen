@@ -1,0 +1,40 @@
+:root { --ink:#1f2a24; --muted:#5d6b63; --paper:#fffdf7; --line:#e6e0cf; --bg:#f3f0e6; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) body.web { --bg:#1a1d1b; } }
+:root[data-theme="dark"] body.web { --bg:#1a1d1b; }
+* { box-sizing: border-box; margin: 0; }
+body { font-family: 'Noto Sans TC', sans-serif; color: var(--ink); background: var(--bg); }
+
+/* ---------- 單張卡片 ---------- */
+.card { background: var(--paper); border-radius: 4mm; overflow: hidden; display: flex; flex-direction: column;
+        border: 0.6mm solid var(--c); }
+.photo { position: relative; background-size: cover; background-repeat: no-repeat; flex: 0 0 auto; }
+.chip { position: absolute; left: 3mm; top: 3mm; background: var(--c); color: #fff; font-weight: 700;
+        font-size: 9pt; padding: 0.8mm 3mm; border-radius: 10mm; box-shadow: 0 0.5mm 1.5mm rgba(0,0,0,.25); }
+.body { padding: 2.6mm 4mm 2mm; display: flex; flex-direction: column; flex: 1; gap: 1.3mm; }
+h2 { font-size: 19pt; font-weight: 900; line-height: 1.1; color: var(--c); }
+.sci { font-style: italic; font-size: 8pt; color: var(--muted); margin-top: -0.8mm; }
+dl { display: grid; grid-template-columns: 7mm 1fr; gap: 0.7mm 1.5mm; font-size: 9.5pt; line-height: 1.35; }
+dt { background: var(--c); color: #fff; font-weight: 700; text-align: center; border-radius: 1.2mm; font-size: 8.5pt; height: fit-content; padding: 0.2mm 0; }
+dd { margin: 0; }
+.tip, .use { font-size: 9pt; line-height: 1.45; }
+.tip b, .use b { display: inline-block; font-size: 7.5pt; color: var(--c); border: 0.3mm solid var(--c);
+                 border-radius: 1mm; padding: 0 1mm; margin-right: 1.2mm; }
+.credit { margin-top: auto; font-size: 5.8pt; color: var(--muted); }
+
+/* ---------- 列印:A4 一頁 4 張(每張 A6) ---------- */
+@page { size: A4; margin: 0; }
+body.print { background: #fff; }
+.print .page { width: 210mm; height: 297mm; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;
+               gap: 5mm; padding: 6mm; page-break-after: always; break-after: page; }
+.print .photo { height: 72mm; }
+
+/* ---------- 網頁 ---------- */
+body.web { padding: 24px 16px 40px; }
+.web header { max-width: 1100px; margin: 0 auto 18px; }
+.web h1 { font-size: 26px; font-weight: 900; color: var(--ink); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .web h1, :root:not([data-theme="light"]) .web header p { color: #e9eee9; } }
+:root[data-theme="dark"] .web h1, :root[data-theme="dark"] .web header p { color: #e9eee9; }
+.web header p { color: var(--muted); font-size: 14px; margin-top: 4px; }
+.web .grid { max-width: 1100px; margin: 0 auto; display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.web .card { font-size: 15px; }
+.web .photo { aspect-ratio: 4 / 3; }

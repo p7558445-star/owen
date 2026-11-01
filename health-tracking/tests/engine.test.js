@@ -164,17 +164,29 @@ t('888 find: registered vs measured at least once', () => {
   const c = E.cascade888(db, D(2));
   assert.equal(c.find.k, 1); assert.equal(c.find.n, 2); assert.deepEqual(c.ids.unscreened, ['p2']); assert.equal(c.find.need, 1);
 });
-t('888 intervene/control: denominators by highest level, numerator by entering management', () => {
+t('888 intervene: yellow-or-above denominator, numerator by entering management', () => {
   const db = db0();
   const { episode: ep } = add(db, D(1), { sbp: 150, dbp: 85 }); // 橙
   let c = E.cascade888(db, D(2));
   assert.equal(c.intervene.n, 1, 'orange counts in the yellow-or-above denominator');
-  assert.equal(c.control.n, 1); assert.equal(c.control.k, 0, 'pending is not yet in management');
+  assert.equal(c.intervene.k, 0, 'pending is not yet in management');
   E.act(db, ep.id, 'notify', {}, D(3));
-  c = E.cascade888(db, D(4));
-  assert.equal(c.intervene.k, 1); assert.equal(c.control.k, 1);
-  c = E.cascade888(db, D(4), { entry: 'intervened' });
-  assert.equal(c.control.k, 0, 'stricter entry definition');
+  assert.equal(E.cascade888(db, D(4)).intervene.k, 1);
+  assert.equal(E.cascade888(db, D(4), { entry: 'intervened' }).intervene.k, 0, 'stricter entry definition');
+});
+t('888 control: orange-or-above denominator, numerator = latest later session green', () => {
+  const db = db0();
+  add(db, D(1), { sbp: 150, dbp: 85, weight: 60 });
+  let c = E.cascade888(db, D(2));
+  assert.equal(c.control.n, 1); assert.equal(c.control.k, 0, 'the orange session itself is not control');
+  add(db, D(10), { sbp: 125, dbp: 75, weight: 68 }); // 血壓綠，BMI 25 黃
+  c = E.cascade888(db, D(11));
+  assert.equal(c.control.k, 0, 'overall is yellow, not green');
+  assert.equal(E.cascade888(db, D(11), { green: 'items' }).control.k, 1, 'items mode: BP back to green');
+  add(db, D(20), { sbp: 124, dbp: 74, weight: 60 });
+  assert.equal(E.cascade888(db, D(21)).control.k, 1);
+  add(db, D(30), { sbp: 145, dbp: 80, weight: 60 });
+  assert.equal(E.cascade888(db, D(31)).control.k, 0, 'relapse: latest is orange again');
 });
 t('888: yellow-only person is not in the orange denominator', () => {
   const db = db0();

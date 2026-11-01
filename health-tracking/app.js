@@ -469,7 +469,7 @@
   const GAPS = {
     unscreened: ['找得出：已建檔、未曾量測', '邀請到健康站量測（可依據點分派志工電話邀約）'],
     yellowUnmanaged: ['要介入：黃層以上、未進入管理流程', '派案並通知民眾，完成健康處方'],
-    orangeUnmanaged: ['要達標：橙層以上、未進入管理流程', '優先派案，轉介就醫並確認'],
+    orangeNotGreen: ['要達標：橙層以上、尚未回到綠層', '確認已就醫與用藥、強化健康處方，邀請回站複測'],
   };
 
   function view888() {
@@ -479,8 +479,8 @@
     const entry = E.ENTRY_888[o.entry];
     const stages = [
       ['找得出', c.find, '健康站已建立個資的民眾', '健康站量測至少 1 次', 'unscreened'],
-      ['要介入', c.intervene, '至少一次進入黃層（含以上）的民眾', `進入管理流程（${entry}）`, 'yellowUnmanaged'],
-      ['要達標', c.control, '至少一次進入橙層（含以上）的民眾', `進入管理流程（${entry}）`, 'orangeUnmanaged'],
+      ['要介入', c.intervene, '至少一次進入黃層以上的民眾', `進入管理流程（${entry}）`, 'yellowUnmanaged'],
+      ['要達標', c.control, '至少一次進入橙層以上的民眾', `控制良好：之後最近一次量測進入綠層（${E.GREEN_888[o.green]}）`, 'orangeNotGreen'],
     ];
     const rows = c.ids[g].map((id) => IX.byPerson.get(id)).filter(Boolean);
     return `<div class="row spread"><h1>健康888</h1><span class="small muted">${o.lookbackDays ? `近 ${o.lookbackDays} 天` : '全部期間'}・${ui.site === 'all' ? '全部據點' : esc(ui.site)}・<a href="#/rules">調整定義</a></span></div>
@@ -498,7 +498,8 @@
     </div>
     <details class="card" style="margin-top:12px"><summary><strong>計算說明</strong></summary><ul class="small">
       <li>「至少一次進入黃層／橙層」：觀察期內任一量測場次的整體層級達到該層級以上；同一場次 60 分鐘內重測回到綠層者不計。</li>
-      <li>「進入管理流程」：該民眾有追蹤案在觀察期內到達「${entry}」。要達標的分子只計橙層以上的追蹤案。可在設定頁改為已通知／已介入／已確認。</li>
+      <li>「進入管理流程」（要介入的分子）：該民眾有追蹤案在觀察期內到達「${entry}」。可在設定頁改為已通知／已介入／已確認。</li>
+      <li>「控制良好」（要達標的分子）：首次達橙層以上之後，觀察期內最近一次量測進入綠層（${E.GREEN_888[o.green]}）。只量過那一次橙層、之後未再量測者，不算達標；達綠後再升回橙層者，也不算達標。</li>
       <li>三個指標的分母是不同母群，不是前一段的分子，不能相乘。</li>
       <li>信賴區間採 Wilson score 法；據點人數少時區間很寬。</li></ul></details>`;
   }
@@ -633,6 +634,7 @@
       <div class="form-grid">
         <label class="f">觀察期（天，0 為全部）<input type="number" min="0" data-t888="lookbackDays" value="${t8.lookbackDays}"></label>
         <label class="f">「進入管理流程」的判定<select data-t888="entry">${Object.entries(E.ENTRY_888).map(([k, v]) => `<option value="${k}" ${t8.entry === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+        <label class="f">要達標「進入綠層」的判定<select data-t888="green">${Object.entries(E.GREEN_888).map(([k, v]) => `<option value="${k}" ${t8.green === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
         <label class="f">目標比率（%）<input type="number" min="1" max="100" data-t888="target" value="${Math.round(t8.target * 100)}"></label>
       </div></div>
     <div class="card" style="margin-top:12px"><h2>處理時限設定（天）</h2>
@@ -735,7 +737,7 @@
         const s = JSON.parse(JSON.stringify(sla()));
         $$('[data-sla]').forEach((i) => { const [a, b] = i.dataset.sla.split('.'); const v = i.value === '' ? null : Math.max(0, +i.value); if (b) s[a][b] = v; else s[a] = v; });
         const t8 = t888();
-        $$('[data-t888]').forEach((i) => { const k = i.dataset.t888; if (i.value === '') return; t8[k] = k === 'entry' ? i.value : k === 'target' ? Math.min(100, Math.max(1, +i.value)) / 100 : Math.max(0, +i.value); });
+        $$('[data-t888]').forEach((i) => { const k = i.dataset.t888; if (i.value === '') return; t8[k] = k === 'entry' || k === 'green' ? i.value : k === 'target' ? Math.min(100, Math.max(1, +i.value)) / 100 : Math.max(0, +i.value); });
         db.settings = Object.assign({}, db.settings, { t888: t8, sla: s, nurses: $('#nurses').value.split(/[,，、]/).map((x) => x.trim()).filter(Boolean) });
         save(); render(); toast('設定已儲存');
       };

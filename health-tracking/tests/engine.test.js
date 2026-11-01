@@ -12,17 +12,20 @@ const at = (min = 0) => new Date(Date.UTC(2026, 9, 1, 2, min)).toISOString();
 const lv = (readings, person = P) => E.evaluateSession(person, readings.map((r, i) => Object.assign({ id: 'r' + i, at: at(i * 5) }, r)));
 const item = (k, readings, person) => lv(readings, person).items[k];
 
-// ── 血壓
-t('BP green', () => assert.equal(item('bp', [{ sbp: 128, dbp: 79 }]).level, 'green'));
-t('BP yellow by SBP only (或)', () => assert.equal(item('bp', [{ sbp: 135, dbp: 75 }]).level, 'yellow'));
-t('BP yellow by DBP only', () => assert.equal(item('bp', [{ sbp: 120, dbp: 85 }]).level, 'yellow'));
-t('BP orange', () => assert.equal(item('bp', [{ sbp: 140, dbp: 70 }]).level, 'orange'));
-t('BP orange DBP 90', () => assert.equal(item('bp', [{ sbp: 120, dbp: 90 }]).level, 'orange'));
-t('BP red 180 provisional on single reading', () => { const r = item('bp', [{ sbp: 182, dbp: 95 }]); assert.equal(r.level, 'red'); assert.ok(r.provisional); });
+// ── 血壓（院內修訂版：綠 <140/90；黃 140–159／90–99；橙 160–179／100–109；紅 ≥180／≥110）
+t('BP green 139/89', () => assert.equal(item('bp', [{ sbp: 139, dbp: 89 }]).level, 'green'));
+t('BP yellow by SBP 140', () => assert.equal(item('bp', [{ sbp: 140, dbp: 75 }]).level, 'yellow'));
+t('BP yellow by DBP 90', () => assert.equal(item('bp', [{ sbp: 120, dbp: 90 }]).level, 'yellow'));
+t('BP yellow upper 159/99', () => assert.equal(item('bp', [{ sbp: 159, dbp: 99 }]).level, 'yellow'));
+t('BP orange by SBP 160', () => assert.equal(item('bp', [{ sbp: 160, dbp: 80 }]).level, 'orange'));
+t('BP orange by DBP 100', () => assert.equal(item('bp', [{ sbp: 130, dbp: 100 }]).level, 'orange'));
+t('BP orange upper 179/109', () => assert.equal(item('bp', [{ sbp: 179, dbp: 109 }]).level, 'orange'));
+t('BP red 180 provisional on single reading', () => { const r = item('bp', [{ sbp: 180, dbp: 95 }]); assert.equal(r.level, 'red'); assert.ok(r.provisional); });
+t('BP red by DBP 110', () => assert.equal(item('bp', [{ sbp: 165, dbp: 110 }]).level, 'red'));
 t('BP red confirmed after retest', () => { const r = item('bp', [{ sbp: 185, dbp: 95 }, { sbp: 181, dbp: 96 }]); assert.equal(r.level, 'red'); assert.ok(!r.provisional); });
 t('BP retest drops to orange', () => assert.equal(item('bp', [{ sbp: 185, dbp: 95 }, { sbp: 165, dbp: 92 }]).level, 'orange'));
-t('BP 165/95 + chest pain = red emergency', () => { const r = item('bp', [{ sbp: 165, dbp: 95, symptoms: ['chest_pain'] }]); assert.equal(r.level, 'red'); assert.ok(r.emergency); });
-t('BP 165/95 without symptoms = orange', () => assert.equal(item('bp', [{ sbp: 165, dbp: 95 }]).level, 'orange'));
+t('BP 165/95 + chest pain = orange, flagged emergency', () => { const r = item('bp', [{ sbp: 165, dbp: 95, symptoms: ['chest_pain'] }]); assert.equal(r.level, 'orange'); assert.ok(r.emergency); });
+t('BP 185/95 + chest pain = red emergency, not provisional', () => { const r = item('bp', [{ sbp: 185, dbp: 95, symptoms: ['chest_pain'] }]); assert.equal(r.level, 'red'); assert.ok(r.emergency); assert.ok(!r.provisional); });
 
 // ── 脈搏
 t('pulse green', () => assert.equal(item('pulse', [{ pulse: 72 }]).level, 'green'));
@@ -79,8 +82,26 @@ t('BMI 28 orange', () => assert.equal(item('body', [{ weight: 76 }]).level, 'ora
 t('female body fat 36 orange', () => assert.equal(item('body', [{ weight: 52, bodyFat: 36 }], F).level, 'orange'));
 t('male body fat 9 orange', () => assert.equal(item('body', [{ weight: 60, bodyFat: 9 }]).level, 'orange'));
 
+// ── 生活型態項目不計入整體層級
+t('body/mets excluded from overall', () => {
+  const ev = lv([{ sbp: 120, dbp: 70, weight: 80, waist: 95 }]);
+  assert.equal(ev.items.body.level, 'orange'); assert.equal(ev.overall, 'green'); assert.equal(ev.lifestyle, 'orange');
+});
+t('lifestyle-only abnormal opens no episode', () => {
+  const db = { persons: [{ id: 'p1', name: 'x', sex: 'M', birth: '1950-01-01', heightCm: 165 }], measurements: [{ id: 'a', personId: 'p1', at: '2026-01-01T01:00:00Z', sbp: 120, dbp: 70, weight: 80 }], episodes: [] };
+  const r = E.ingest(db, 'p1', '2026-01-01T01:00:00Z');
+  assert.equal(r.episode, undefined); assert.equal(db.episodes.length, 0);
+  assert.ok(E.lifestylePrescription(db.persons[0], r.ev).includes('BMI'));
+});
+t('lifestyle items ride along in the prescription of a BP episode', () => {
+  const db = { persons: [{ id: 'p1', name: 'x', sex: 'M', birth: '1950-01-01', heightCm: 165 }], measurements: [{ id: 'a', personId: 'p1', at: '2026-01-01T01:00:00Z', sbp: 165, dbp: 80, weight: 80 }], episodes: [] };
+  const { episode: ep } = E.ingest(db, 'p1', '2026-01-01T01:00:00Z');
+  assert.equal(ep.level, 'orange'); assert.ok(E.prescription(db.persons[0], ep).includes('生活型態追蹤'));
+  assert.equal(new Date(ep.due.confirm) - new Date('2026-01-01T01:00:00Z') > 20 * 864e5, true, 'lifestyle timing does not shorten BP deadlines');
+});
+
 // ── 整體層級取最高
-t('overall = max', () => assert.equal(lv([{ sbp: 135, dbp: 70, glucose: 130, glucoseType: '空腹', spo2: 97 }]).overall, 'orange'));
+t('overall = max', () => assert.equal(lv([{ sbp: 145, dbp: 70, glucose: 130, glucoseType: '空腹', spo2: 97 }]).overall, 'orange'));
 
 // ── 閉環流程
 function db0() { return { persons: [{ id: 'p1', name: '測試', sex: 'M', birth: '1950-01-01', heightCm: 165 }], measurements: [], episodes: [] }; }
@@ -89,7 +110,7 @@ const D = (d, h = 9) => new Date(2026, 0, d, h).toISOString();
 
 t('full orange loop with 2-consecutive downgrade', () => {
   const db = db0();
-  const { episode: ep } = add(db, D(1), { sbp: 150, dbp: 85 });
+  const { episode: ep } = add(db, D(1), { sbp: 165, dbp: 85 });
   assert.equal(ep.level, 'orange'); assert.equal(ep.state, 'pending');
   E.act(db, ep.id, 'notify', { method: '電話' }, D(2), '護理師A');
   assert.throws(() => E.act(db, ep.id, 'intervene', {}, D(2)), /健康處方/);
@@ -107,7 +128,7 @@ t('full orange loop with 2-consecutive downgrade', () => {
 
 t('upgrade during open episode resets to pending', () => {
   const db = db0();
-  const { episode: ep } = add(db, D(1), { sbp: 135, dbp: 70 });
+  const { episode: ep } = add(db, D(1), { sbp: 145, dbp: 70 });
   assert.equal(ep.level, 'yellow');
   E.act(db, ep.id, 'notify', {}, D(2));
   add(db, D(5), { sbp: 182, dbp: 100 });
@@ -150,7 +171,7 @@ t('maintain opens next cycle', () => {
 
 t('overdue: notified but no intervention', () => {
   const db = db0();
-  const { episode: ep } = add(db, D(1), { sbp: 150, dbp: 85 });
+  const { episode: ep } = add(db, D(1), { sbp: 165, dbp: 85 });
   E.act(db, ep.id, 'notify', {}, D(2));
   assert.ok(E.nextStep(ep, D(30)).overdue);
   const q = E.quality(db, D(30), null);
@@ -169,7 +190,7 @@ t('888 intervene: only 3-high abnormalities count', () => {
   const db = db0();
   add(db, D(1), { sbp: 120, dbp: 70, temp: 37.5, weight: 70 }); // 體溫黃、BMI 黃，但三高綠
   assert.equal(E.cascade888(db, D(2)).intervene.n, 0);
-  const { episode: ep } = add(db, D(5), { sbp: 150, dbp: 85 });
+  const { episode: ep } = add(db, D(5), { sbp: 165, dbp: 85 });
   let c = E.cascade888(db, D(6));
   assert.equal(c.intervene.n, 1); assert.equal(c.intervene.k, 0);
   E.act(db, ep.id, 'notify', {}, D(7));
@@ -178,8 +199,8 @@ t('888 intervene: only 3-high abnormalities count', () => {
 });
 t('888 improve: two consecutive sessions below peak, ignoring non-3-high items', () => {
   const db = db0();
-  add(db, D(1), { sbp: 150, dbp: 85 });                 // 橙
-  add(db, D(10), { sbp: 135, dbp: 75, weight: 76 });    // 三高黃（BMI 橙不影響）
+  add(db, D(1), { sbp: 165, dbp: 85 });                 // 橙
+  add(db, D(10), { sbp: 145, dbp: 75, weight: 76 });    // 三高黃（BMI 橙不影響）
   let c = E.cascade888(db, D(11));
   assert.equal(c.improve.n, 1); assert.equal(c.improve.k, 0, 'one lower session is not enough');
   assert.equal(E.cascade888(db, D(11), { downgrade: 1 }).improve.k, 1, 'single-session option');
@@ -188,12 +209,12 @@ t('888 improve: two consecutive sessions below peak, ignoring non-3-high items',
 });
 t('888 improve: rise resets the run and raises the peak', () => {
   const db = db0();
-  add(db, D(1), { sbp: 150, dbp: 85 });   // 橙
-  add(db, D(5), { sbp: 135, dbp: 75 });   // 黃
+  add(db, D(1), { sbp: 165, dbp: 85 });   // 橙
+  add(db, D(5), { sbp: 145, dbp: 75 });   // 黃
   add(db, D(10), { sbp: 182, dbp: 112 }); // 紅：新高峰
-  add(db, D(15), { sbp: 150, dbp: 85 });  // 橙（低於紅）
+  add(db, D(15), { sbp: 165, dbp: 85 });  // 橙（低於紅）
   assert.equal(E.cascade888(db, D(16)).improve.k, 0);
-  add(db, D(20), { sbp: 145, dbp: 85 });  // 橙（連續第 2 次低於紅）
+  add(db, D(20), { sbp: 162, dbp: 85 });  // 橙（連續第 2 次低於紅）
   assert.equal(E.cascade888(db, D(21)).improve.k, 1);
 });
 t('888: same-session retest back to green is not counted as yellow', () => {

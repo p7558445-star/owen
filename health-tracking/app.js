@@ -254,7 +254,7 @@
     ${rows.map(({ e, p, s }) => `<tr class="click" data-href="#/p/${p.id}"><td>${lv(e.level)}${e.provisional ? ' <span class="tag warn" data-tip="單次量測，需重測確認">暫定</span>' : ''}${e.emergency ? ' <span class="tag bad">急</span>' : ''}${e.cycle > 1 ? `<div class="small muted">第 ${e.cycle} 週期</div>` : ''}</td>
       <td><strong>${esc(pname(p))}</strong><div class="small muted">${esc(pid2(p))}・${p.sex === 'M' ? '男' : p.sex === 'F' ? '女' : '—'} ${E.ageAt(p.birth, new Date()) ?? '—'} 歲</div></td>
       <td class="small">${esc(p.site)}</td>
-      <td class="small">${e.items.map((i) => `<span class="lv ${i.level}" style="margin:0 4px 4px 0" data-tip="${esc(`${i.value}｜${i.reason}`)}">${E.ITEM_LABEL[i.key]}</span>`).join('')}</td>
+      <td class="small">${e.items.map((i) => `<span class="lv ${i.level}" style="margin:0 4px 4px 0" data-tip="${esc(`${i.value}｜${i.reason}${i.lifestyle ? '｜生活型態追蹤，不轉介' : ''}`)}">${E.ITEM_LABEL[i.key]}${i.lifestyle ? '・生活' : ''}</span>`).join('')}</td>
       <td class="small">${E.STATE_LABEL[e.state]}</td><td class="small">${esc(s.label)}</td><td class="small">${dueText(s)}</td><td class="small">${esc(e.assignee || '未派')}</td></tr>`).join('')}
     </tbody></table></div>` : '<div class="card empty">沒有符合條件的追蹤案</div>'}`;
   }
@@ -301,14 +301,17 @@
     <div class="grid g-side">
       <div class="stack">
         ${ep ? episodeCard(p, ep, now) : `<div class="card"><h2>追蹤狀態</h2><p>${lv(l ? (l.ev.overall === 'na' ? 'na' : l.ev.overall) : 'na')} 目前沒有開放中的追蹤案。${l && E.RANK[l.ev.overall] <= 0 ? '回饋與例行量測即可。' : ''}</p></div>`}
+        ${l && E.RANK[l.ev.lifestyle] >= 1 ? `<div class="card" style="border-left:4px solid var(--lv-${l.ev.lifestyle})"><div class="row spread"><h2 style="margin:0">生活型態追蹤 ${lv(l.ev.lifestyle)}</h2><button class="btn sm no-print" type="button" id="life-rx">列印生活型態處方</button></div>
+          <p class="small" style="margin:6px 0 0">${E.LIFESTYLE.map((k) => l.ev.items[k]).filter((r) => r && E.RANK[r.level] >= 1).map((r) => `${r.label}：${esc(r.value)}（${E.LEVEL_LABEL[r.level]}）`).join('；')}</p>
+          <p class="small muted" style="margin:4px 0 0">只開健康處方，不派案、不轉介，也不計入整體層級。${ep ? '已併入目前追蹤案的健康處方。' : ''}</p></div>` : ''}
         <div class="card"><div class="row spread"><h2>最近一次量測判定</h2><span class="small muted">${l ? fmtDT(l.session.at) + (l.session.readings.length > 1 ? `・含 ${l.session.readings.length - 1} 次重測` : '') : ''}</span></div>
           ${l ? `<div class="tbl-wrap"><table><thead><tr><th>項目</th><th>數值</th><th>層級</th><th>判定依據</th><th>處理建議</th></tr></thead><tbody>
-          ${E.ITEMS.map((it) => { const r = l.ev.items[it.key]; return r ? `<tr><td>${it.label}</td><td class="tnum">${esc(r.value)}</td><td>${lv(r.level)}${r.provisional ? ' <span class="tag warn">暫定</span>' : ''}</td><td class="small">${esc(r.reason)}${r.notes.length ? `<div class="small" style="color:var(--warn-ink)">${r.notes.map(esc).join('<br>')}</div>` : ''}</td><td class="small">${r.actions.map(esc).join('、')}</td></tr>` : `<tr><td>${it.label}</td><td colspan="4" class="muted small">本次未量測</td></tr>`; }).join('')}
+          ${E.ITEMS.map((it) => { const r = l.ev.items[it.key]; return r ? `<tr><td>${it.label}</td><td class="tnum">${esc(r.value)}</td><td>${lv(r.level)}${r.provisional ? ' <span class="tag warn">暫定</span>' : ''}${r.lifestyle ? ' <span class="tag" data-tip="生活型態追蹤：不計入整體層級、不轉介">生活型態</span>' : ''}</td><td class="small">${esc(r.reason)}${r.notes.length ? `<div class="small" style="color:var(--warn-ink)">${r.notes.map(esc).join('<br>')}</div>` : ''}</td><td class="small">${r.actions.map(esc).join('、')}</td></tr>` : `<tr><td>${it.label}</td><td colspan="4" class="muted small">本次未量測</td></tr>`; }).join('')}
           </tbody></table></div>${l.ev.symptoms.length ? `<p class="small">回報症狀：${l.ev.symptoms.map((s) => E.SYMPTOMS[s] || s).join('、')}</p>` : ''}` : '<div class="empty">尚無量測資料</div>'}
         </div>
         <div class="card"><h2>趨勢</h2><p class="small muted" style="margin-top:-6px">點的顏色為該次量測的層級；虛線為分層閾值。滑過可看數值。</p>
           <div class="grid g2">
-            <div><h3>血壓（mmHg）</h3><div class="legend"><span>— 實線 收縮壓</span><span>- - 虛線 舒張壓</span></div>${lineChart({ series: [series('bp', 'sbp', '收縮壓'), series('bp', 'dbp', '舒張壓', { dash: true })], refs: [{ v: 140, label: '140', level: 'orange' }, { v: 90, label: '90', level: 'orange' }] })}</div>
+            <div><h3>血壓（mmHg）</h3><div class="legend"><span>— 實線 收縮壓</span><span>- - 虛線 舒張壓</span></div>${lineChart({ series: [series('bp', 'sbp', '收縮壓'), series('bp', 'dbp', '舒張壓', { dash: true })], refs: [{ v: 160, label: '160', level: 'orange' }, { v: 140, label: '140', level: 'yellow' }, { v: 90, label: '90', level: 'yellow' }] })}</div>
             <div><h3>血糖（mg/dL）</h3>${lineChart({ series: [series('glucose', 'glucose', '血糖')], refs: [{ v: 126, label: '空腹126', level: 'orange' }, { v: 200, label: '飯後200', level: 'orange' }] })}</div>
             <div><h3>血氧（%）</h3>${lineChart({ series: [series('spo2', 'spo2', '血氧')], refs: [{ v: 95, label: '95', level: 'yellow' }, { v: 90, label: '90', level: 'red' }], yMax: 100 })}</div>
             <div><h3>脈搏（次/分）</h3>${lineChart({ series: [series('pulse', 'pulse', '脈搏')], refs: [{ v: 100, label: '100', level: 'orange' }, { v: 60, label: '60', level: 'yellow' }] })}</div>
@@ -429,8 +432,8 @@
     } }]);
   }
 
-  function printRx(p, ep) {
-    const text = ep.rx ? ep.rx.text : E.prescription(p, ep);
+  function printRx(p, ep, txt) {
+    const text = txt || (ep.rx ? ep.rx.text : E.prescription(p, ep));
     const w = window.open('', '_blank');
     if (!w) { toast('瀏覽器擋住了列印視窗'); return; }
     w.document.write(`<!doctype html><meta charset="utf-8"><title>健康處方</title><body style="font:16px/1.7 'Noto Sans TC',sans-serif;padding:32px;white-space:pre-wrap">${esc(text)}\n\n開立：${esc(ui.user)}　日期：${fmtD(nowISO())}\n彰化基督教醫院 社區智慧健康站</body>`);
@@ -611,14 +614,14 @@
   function rulesView() {
     const s = sla(), t8 = t888();
     const T = [
-      ['血壓（mmHg）', '收縮壓 <130 且舒張壓 <80', '收縮壓 130–139 或舒張壓 80–89', '≥140 或 ≥90', '≥180 或 ≥110；或 ≥160/100 並有胸痛、劇烈頭痛、言語不清、肢體無力'],
+      ['血壓（mmHg，院內修訂版）', '收縮壓 <140 且舒張壓 <90', '收縮壓 140–159 或舒張壓 90–99', '收縮壓 160–179 或舒張壓 100–109', '收縮壓 ≥180 或舒張壓 ≥110（休息 5 分鐘後重測；有症狀撥 119；無症狀仍須當日就醫）'],
       ['脈搏與心律（次/分）', '60–100', '50–59（無症狀）', '<50 或 >100（休息 5–10 分鐘後重測仍異常）；設備心律旗標 ARR／疑似房顫', '<40 或 >120 持續；或合併胸痛、暈厥、呼吸困難'],
       ['血氧（%）', '95–100', '91–94', '91–94 且重測 2 次仍低；或低於慢性肺病者個人基線', '≤90（重測仍低）；或合併呼吸困難、嘴唇發紺'],
       ['體溫（℃）', '36.0–37.0', '35.0–35.9 或 37.1–37.9', '≥38 且 <39；<35（保暖 30 分鐘後重測仍 <35）', '≥39；或發燒／低體溫合併意識改變、呼吸困難、抽搐'],
       ['血糖（mg/dL）', '空腹 <100；飯後 <140', '空腹 100–125；飯後 140–199', '空腹 ≥126；飯後 ≥200', '任何 ≥300；或合併多尿、口渴、噁心嘔吐、意識改變；或用藥者 <70 並有症狀'],
       ['血脂（mg/dL）', 'LDL <130；TG <150', 'LDL 130–159；或 TG 150–199', 'LDL 160–189；或 TG 200–499', 'LDL ≥190；或 TG ≥500；或急性心血管症狀（1 週內，有症狀當日）'],
-      ['代謝症候群（5 項）', '0 項', '1–2 項', '≥3 項', '（無紅層）'],
-      ['BMI・腰圍・體脂', 'BMI 18.5–23.9；腰圍達標；體脂男 10–20%、女 20–30%', 'BMI <18.5 或 24–26.9；腰圍男 ≥90、女 ≥80；體脂男 20–25%、女 30–35%', 'BMI ≥27；體脂男 >25%、女 >35%；或男 <10%、女 <20%', '（無紅層）'],
+      ['代謝症候群（5 項）【生活型態追蹤】', '0 項', '1–2 項', '≥3 項', '（無紅層）'],
+      ['BMI・腰圍・體脂【生活型態追蹤】', 'BMI 18.5–23.9；腰圍達標；體脂男 10–20%、女 20–30%', 'BMI <18.5 或 24–26.9；腰圍男 ≥90、女 ≥80；體脂男 20–25%、女 30–35%', 'BMI ≥27；體脂男 >25%、女 >35%；或男 <10%、女 <20%', '（無紅層）'],
     ];
     const num = (path, v) => `<input type="number" min="0" style="width:64px" data-sla="${path}" value="${v ?? ''}">`;
     return `<h1>分層規則與設定</h1>
@@ -627,7 +630,7 @@
       <tr><td>${lv('yellow')}</td><td>偏高或邊緣，尚無轉介必要</td><td>健康處方</td><td>6 個月複測</td></tr>
       <tr><td>${lv('orange')}</td><td>異常，需醫師評估</td><td>4 週內轉介就醫，並確認有就醫、健康處方</td><td>3 個月複測</td></tr>
       <tr><td>${lv('red')}</td><td>可能危及安全</td><td>當日處理，24 小時內確認就醫、健康處方</td><td>就醫後 2 週電訪確認</td></tr>
-    </tbody></table></div><p class="small muted">整體層級取各項目中最高者；只要有異常就要完成健康處方。依據：《彰基社區智慧健康站量測異常分層管理與閉環追蹤建議 v1》。</p></div>
+    </tbody></table></div><p class="small muted">整體層級取各項目中最高者，但【生活型態追蹤】項目（BMI・腰圍・體脂、代謝症候群）不計入整體層級、不派案、不轉介，只開健康處方。只要有異常就要完成健康處方。依據：《彰基社區智慧健康站量測異常分層管理與閉環追蹤建議 v1》。</p></div>
     <div class="card" style="margin-top:12px"><h2>各項目閾值</h2><div class="tbl-wrap"><table class="small"><thead><tr><th>項目</th><th>${lv('green')}</th><th>${lv('yellow')}</th><th>${lv('orange')}</th><th>${lv('red')}</th></tr></thead><tbody>${T.map((r) => `<tr>${r.map((c, i) => (i ? `<td>${esc(c)}</td>` : `<td><strong>${esc(c)}</strong></td>`)).join('')}</tr>`).join('')}</tbody></table></div></div>
     <div class="card" style="margin-top:12px"><h2>閉環流程</h2><p>偵測 → 待派案 → 已通知 → 已介入（含健康處方）→ 已確認（就醫或完成處方）→ 已複測（紅層為就醫後電訪）→ 判定（降級、維持、升級、結案）</p>
       <ul class="small"><li>每一筆個案都必須走到「判定」，不能停在「已通知」。</li><li>新量測高於目前層級時立即升級並重新派案；達標後連續 2 次維持才降級。</li><li>慢性病不直接結案；結案原因限於：${E.CLOSE_REASONS.join('、')}（轉由醫師管理需登記回診日期）。</li></ul></div>
@@ -682,6 +685,7 @@
       const a2 = $('#add-m2'); if (a2) a2.onclick = () => measurementDialog(p);
       const sn = $('#show-nid'); if (sn) sn.onclick = () => { $('#nid').textContent = p.nationalId; sn.remove(); };
       $$('[data-flag]').forEach((c) => (c.onchange = () => { p[c.dataset.flag] = c.checked; save(); render(); toast('已更新風險註記；下次量測起依新註記判定'); }));
+      const lr = $('#life-rx'); if (lr) lr.onclick = () => { const l = IX.latest(p.id); printRx(p, null, E.lifestylePrescription(p, l.ev)); };
       const sb = $('#spo2-base'); if (sb) sb.onchange = () => { p.spo2Baseline = sb.value === '' ? null : +sb.value; save(); };
       $$('[data-print-rx]').forEach((b) => (b.onclick = (e) => { e.preventDefault(); const ta = $('#ep-form textarea[name=rx]'); printRx(p, ta ? Object.assign({}, ep, { rx: { text: ta.value } }) : ep); }));
       if (!ep) return;

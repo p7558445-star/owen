@@ -31,6 +31,8 @@
     { key: 'body', label: 'BMI・腰圍・體脂', unit: '' },
   ];
   const ITEM_LABEL = Object.fromEntries(ITEMS.map((i) => [i.key, i.label]));
+  // 生活型態追蹤項目：照常判定層級並開健康處方，但不計入整體層級、不派案、不轉介
+  const LIFESTYLE = ['mets', 'body'];
 
   // 症狀代碼（App 端回報或護理師勾選）
   const SYMPTOMS = {
@@ -53,9 +55,9 @@
 
   // 文件未明定、本系統採用的解讀（臨床委員會應逐條確認）
   const ASSUMPTIONS = [
-    '血壓黃層文件寫「130–139 且 80–89」，若照字面 135/75 將無層級；本系統採「收縮壓 130–139 或舒張壓 80–89（且未達橙）」。',
-    '血壓黃層「若 ≥130/80 則升橙」與橙層閾值 ≥140/90 不一致，本系統以複測達 ≥140/90 才升橙；請臨床委員會確認原意。',
-    '代謝症候群的血壓判準採國健署標準 ≥130/85（與血壓分層 130/80 不同），血糖判準僅用空腹血糖；已服藥者該項視為符合。',
+    '血壓分層採院內修訂版（2026/11）：綠 <140/90；黃 140–159 或 90–99；橙 160–179 或 100–109；紅 ≥180 或 ≥110。修訂版刪除了「≥160/100 合併症狀即列紅」，本系統改為橙層並標示「急」，提示立即評估。',
+    'BMI・腰圍・體脂與代謝症候群為生活型態追蹤：照常判定層級並開立健康處方，但不計入整體層級、不派案、不轉介。代謝症候群的血壓判準仍採 ≥130/85。',
+    '代謝症候群的血糖判準僅用空腹血糖；已服藥者該項視為符合。',
     '代謝症候群五項未量齊且已符合項數 <3 時，標示為「資料不足」或「至少黃」，不判綠。',
     '單次量測達紅層（血壓、心律、血氧）或需重測確認的橙層（心律、低體溫），先以「暫定」層級派案，不因等待重測而延誤；同一場次 60 分鐘內的重測會自動重新判定。',
     '脈搏 50–59 但有症狀：文件僅定義無症狀為黃，本系統升為橙。',
@@ -103,17 +105,22 @@
     const sbp = s[s.length - 1], dbp = d[d.length - 1];
     const v = `${fmt(sbp)}/${fmt(dbp)}`;
     const bpSx = has(sx, 'chest_pain', 'severe_headache', 'slurred_speech', 'limb_weakness');
-    if (sbp >= 180 || dbp >= 110 || ((sbp >= 160 || dbp >= 100) && bpSx)) {
-      const r = result('bp', 'red', v, sbp >= 180 || dbp >= 110 ? '≥180 或 ≥110' : '≥160/100 並有胸痛、劇烈頭痛、言語不清或肢體無力', {
+    // 院內修訂版（2026/11）：綠 <140/90；黃 140–159 或 90–99；橙 160–179 或 100–109；紅 ≥180 或 ≥110
+    if (sbp >= 180 || dbp >= 110) {
+      const r = result('bp', 'red', v, '≥180 或 ≥110', {
         actions: ['休息 5 分鐘後重測', bpSx ? '有症狀：立即撥 119' : '無症狀仍須當日就醫', '健康處方'],
       });
       if (s.length < 2 && !bpSx) { r.provisional = true; r.notes.push('單次量測，請休息 5 分鐘後重測；重測未降仍須當日就醫'); }
       if (bpSx) r.emergency = true;
       return r;
     }
-    if (sbp >= 140 || dbp >= 90) return result('bp', 'orange', v, '≥140 或 ≥90', { actions: ['轉介家醫科或心臟內科', '已服藥者回診調藥', '健康處方'] });
-    if (sbp >= 130 || dbp >= 80) return result('bp', 'yellow', v, '收縮壓 130–139 或舒張壓 80–89', { actions: ['健康處方（減鹽、運動、體重控制）'] });
-    return result('bp', 'green', v, '<130/80', { actions: ['回饋，維持生活型態'] });
+    if (sbp >= 160 || dbp >= 100) {
+      const r = result('bp', 'orange', v, '收縮壓 160–179 或舒張壓 100–109', { actions: ['轉介家醫科或心臟內科', '已服藥者回診調藥', '健康處方'] });
+      if (bpSx) { r.emergency = true; r.notes.push('合併胸痛、劇烈頭痛、言語不清或肢體無力：請立即評估，必要時撥 119'); }
+      return r;
+    }
+    if (sbp >= 140 || dbp >= 90) return result('bp', 'yellow', v, '收縮壓 140–159 或舒張壓 90–99', { actions: ['健康處方（減鹽、運動、體重控制）'] });
+    return result('bp', 'green', v, '<140/90', { actions: ['回饋，維持生活型態'] });
   }
 
   function evalPulse(rs, sx) {
@@ -275,7 +282,7 @@
     const missing = comps.filter((c) => c.met === null).map((c) => c.name);
     const v = `${n} 項` + (missing.length ? `（缺 ${missing.join('、')}）` : '');
     const metList = comps.filter((c) => c.met).map((c) => c.name).join('、');
-    if (n >= 3) return result('mets', 'orange', v, `符合 ≥3 項：${metList}`, { actions: ['納入代謝症候群防治', '轉介家醫科或新陳代謝科評估', '飲食、運動處方', '健康處方'] });
+    if (n >= 3) return result('mets', 'orange', v, `符合 ≥3 項：${metList}`, { actions: ['納入代謝症候群防治（生活型態追蹤，不轉介）', '飲食、運動處方', '健康處方'] });
     if (n >= 1) return result('mets', 'yellow', v, `符合 ${n} 項：${metList}`, { actions: ['針對異常項目衛教', '健康處方'], notes: missing.length ? ['資料未齊，可能低估'] : [] });
     if (missing.length) return result('mets', 'na', v, '已量項目皆未符合，但資料不齊');
     return result('mets', 'green', v, '0 項', { actions: ['回饋'] });
@@ -307,7 +314,7 @@
       else if (bf < lo) bump('orange', `體脂${sex === 'M' ? '男 <10%' : '女 <20%'}`);
       else if (bf > g) bump('yellow', `體脂${sex === 'M' ? '男 20–25%' : '女 30–35%'}`);
     }
-    const actions = { green: ['回饋'], yellow: ['營養與運動處方', bmi !== null && bmi < 18.5 ? '評估是否為不明原因體重下降或肌少症' : null, '健康處方'].filter(Boolean), orange: ['轉介營養師或肥胖門診', '建立體重管理計畫', '健康處方'] }[lv];
+    const actions = { green: ['回饋'], yellow: ['營養與運動處方', bmi !== null && bmi < 18.5 ? '評估是否為不明原因體重下降或肌少症' : null, '健康處方'].filter(Boolean), orange: ['建立體重管理計畫（生活型態追蹤，不轉介）', '營養與運動處方', '健康處方'] }[lv];
     return result('body', lv, parts.join('、'), why.join('；') || '達標', { actions, bmi });
   }
 
@@ -325,10 +332,13 @@
       const r = EVALUATORS[it.key](readings, sx, person);
       if (r) items[it.key] = r;
     }
-    const graded = Object.values(items).filter((r) => r.level !== 'na');
+    for (const k of LIFESTYLE) if (items[k]) items[k].lifestyle = true;
+    const graded = Object.values(items).filter((r) => r.level !== 'na' && !r.lifestyle);
+    const life = Object.values(items).filter((r) => r.level !== 'na' && r.lifestyle);
     const overall = graded.length ? maxLevel(graded.map((r) => r.level)) : 'na';
     return {
       overall,
+      lifestyle: life.length ? maxLevel(life.map((r) => r.level)) : 'na',
       items,
       symptoms: sx,
       emergency: graded.some((r) => r.emergency),
@@ -394,7 +404,7 @@
   function log(ep, at, type, text, by) { ep.log.push({ at, type, text, by: by || '系統' }); }
 
   function summarizeItems(ev) {
-    return Object.values(ev.items).filter((r) => RANK[r.level] >= 1).map((r) => ({ key: r.key, level: r.level, value: r.value, reason: r.reason, provisional: r.provisional, timing: r.timing }));
+    return Object.values(ev.items).filter((r) => RANK[r.level] >= 1).map((r) => ({ key: r.key, level: r.level, value: r.value, reason: r.reason, provisional: r.provisional, timing: r.lifestyle ? {} : r.timing, lifestyle: !!r.lifestyle }));
   }
 
   function newEpisode(db, person, session, ev, at, parent, sla) {
@@ -658,12 +668,23 @@
     const lines = [`${person.name} 健康處方（${LEVEL_LABEL[ep.level]}層，第 ${ep.cycle} 週期）`, ''];
     for (const i of ep.items) {
       const tpl = RX[i.key] && RX[i.key][i.level];
-      lines.push(`■ ${ITEM_LABEL[i.key]}：${i.value}（${LEVEL_LABEL[i.level]}）`);
+      lines.push(`■ ${ITEM_LABEL[i.key]}：${i.value}（${LEVEL_LABEL[i.level]}${i.lifestyle ? '・生活型態追蹤' : ''}）`);
       if (tpl) tpl.forEach((t) => lines.push('  ・' + t));
     }
     const follow = { red: '就醫後 2 週內護理師將電話關懷確認', orange: '請於 4 週內就醫，3 個月內回健康站複測', yellow: '請於 6 個月內回健康站複測' }[ep.level];
     lines.push('', '追蹤：' + follow);
     if (ep.level === 'red') lines.push('如出現胸痛、呼吸困難、意識改變、言語不清或肢體無力，請立即撥打 119。');
+    return lines.join('\n');
+  }
+
+  function lifestylePrescription(person, ev) {
+    const its = LIFESTYLE.map((k) => ev.items[k]).filter((r) => r && RANK[r.level] >= 1);
+    const lines = [`${person.name} 健康處方（生活型態追蹤）`, ''];
+    for (const i of its) {
+      lines.push(`■ ${ITEM_LABEL[i.key]}：${i.value}（${LEVEL_LABEL[i.level]}）`);
+      ((RX[i.key] && RX[i.key][i.level]) || []).forEach((t) => lines.push('  ・' + t));
+    }
+    lines.push('', '追蹤：請持續到健康站量測腰圍、體重與體脂。');
     return lines.join('\n');
   }
 
@@ -700,11 +721,11 @@
     },
     mets: {
       yellow: ['針對異常項目調整飲食與運動', '腰圍目標：男 <90 公分、女 <80 公分'],
-      orange: ['納入代謝症候群防治計畫，4 週內就醫評估', '飲食、運動處方，3 個月後複測'],
+      orange: ['納入代謝症候群防治：飲食、運動處方', '每週量腰圍、體重，下次回站複測'],
     },
     body: {
       yellow: ['均衡飲食、足夠蛋白質；每週 150 分鐘運動加阻力訓練', '過輕者注意是否有不明原因體重下降'],
-      orange: ['轉介營養師或肥胖門診，建立體重管理計畫', '目標 3–6 個月減重 5%'],
+      orange: ['建立體重管理計畫：飲食記錄、每週 150 分鐘運動加阻力訓練', '目標 3–6 個月減重 5%'],
     },
   };
 
@@ -858,6 +879,7 @@
   const Engine = {
     LEVELS, RANK, LEVEL_LABEL, LEVEL_MEANING, ITEMS, ITEM_LABEL, SYMPTOMS, SYMPTOM_BY_LABEL, ASSUMPTIONS, DEFAULT_SLA, CLOSE_REASONS,
     STATES, STATE_LABEL, OUTCOME_LABEL, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, DOWNGRADE_888, KEYS_888, cascade888,
+    LIFESTYLE, lifestylePrescription,
     maxLevel, evaluateSession, groupSessions, ingest, act, nextStep, suggestJudgement, quality, wilson, prescription,
     parseRoster, parseBirth, validTwId, maskId, maskName, ageAt, addDays, sameDay, normGluType, uid,
   };

@@ -791,26 +791,32 @@
   function maskName(n) { if (!n) return ''; const a = [...n]; return a.length <= 2 ? a[0] + 'Ｏ' : a[0] + 'Ｏ'.repeat(a.length - 2) + a[a.length - 1]; }
 
   // ───────────────────────── 健康 888 ─────────────────────────
-  // 找得出：名冊民眾中，健康站量測至少 1 次
-  // 要介入：至少一次進入黃層（含以上）的民眾中，進入管理流程
-  // 要達標：至少一次進入橙層（含以上）的民眾中，之後最近一次量測進入綠層（控制良好）
-  // 「進入管理流程」可設定為追蹤案到達 已通知／已介入／已確認。
-  // 「進入綠層」可設定為整體層級為綠，或曾達橙層以上的項目皆回到綠。
-  const DEFAULT_888 = { lookbackDays: 365, entry: 'notified', green: 'overall', target: 0.8 };
-  const GREEN_888 = { overall: '整體層級為綠（所有已量項目皆綠）', items: '曾達橙層以上的項目皆回到綠' };
+  // 只看三高項目（血壓、血糖、血脂）；每個場次的「三高層級」取這三項中最高者。
+  // 找得出：名冊民眾中，健康站量測三高項目至少 1 次
+  // 要介入：至少一次三高層級達黃層以上的民眾中，進入管理流程（三高項目的追蹤案）
+  // 有改善：至少一次三高層級達橙層以上的民眾中，曾經降級過
+  //         降級＝之後的量測低於先前最高層級；預設需連續 2 個場次（與文件「連續 2 次才降級」一致）
+  const KEYS_888 = ['bp', 'glucose', 'lipid'];
+  const DEFAULT_888 = { lookbackDays: 365, entry: 'notified', downgrade: 2, target: 0.8 };
   const ENTRY_888 = { notified: '已通知（派案並通知民眾）', intervened: '已介入（完成健康處方）', confirmed: '已確認（就醫或完成處方）' };
+  const DOWNGRADE_888 = { 2: '連續 2 個場次低於先前最高層級', 1: '任 1 個場次低於先前最高層級' };
 
-  // 首次達橙層以上之後的量測，最近一次是否「進入綠層」
-  function greenAfterOrange(evs, mode) {
-    const first = evs.findIndex((ev) => RANK[ev.overall] >= 2);
-    const after = evs.slice(first + 1);
-    if (!after.length) return false;
-    if (mode !== 'items') return after[after.length - 1].overall === 'green';
-    const keys = new Set(evs.flatMap((ev) => Object.values(ev.items).filter((r) => RANK[r.level] >= 2).map((r) => r.key)));
-    return [...keys].every((k) => {
-      const last = after.filter((ev) => ev.items[k] && ev.items[k].level !== 'na').pop();
-      return !!last && last.items[k].level === 'green';
-    });
+  function level888(ev) {
+    const ls = KEYS_888.map((k) => ev.items[k]).filter((r) => r && r.level !== 'na').map((r) => r.level);
+    return ls.length ? maxLevel(ls) : 'na';
+  }
+
+  // 首次達橙層以上之後，是否曾降級
+  function improved888(levels, need) {
+    const first = levels.findIndex((l) => RANK[l] >= 2);
+    if (first < 0) return false;
+    let peak = levels[first], run = 0;
+    for (const l of levels.slice(first + 1)) {
+      if (l === 'na') continue;
+      if (RANK[l] < RANK[peak]) { if (++run >= need) return true; } else run = 0;
+      if (RANK[l] > RANK[peak]) peak = l;
+    }
+    return false;
   }
 
   function cascade888(db, now, opts, filter) {
@@ -822,21 +828,21 @@
     const mBy = new Map(), eBy = new Map();
     for (const m of db.measurements) { if (!mBy.has(m.personId)) mBy.set(m.personId, []); mBy.get(m.personId).push(m); }
     for (const e of db.episodes) { if (!eBy.has(e.personId)) eBy.set(e.personId, []); eBy.get(e.personId).push(e); }
-    const ids = { unscreened: [], yellowUnmanaged: [], orangeNotGreen: [] };
-    let screened = 0, visits = 0, everY = 0, mgY = 0, everO = 0, mgO = 0;
+    const ids = { unscreened: [], yellowUnmanaged: [], orangeNotImproved: [] };
+    let screened = 0, visits = 0, everY = 0, mgY = 0, everO = 0, imp = 0;
     for (const p of persons) {
-      const sessions = groupSessions(mBy.get(p.id) || []).filter((s) => inWin(s.at));
-      if (!sessions.length) { ids.unscreened.push(p.id); continue; }
-      screened++; visits += sessions.length;
-      const evs = sessions.map((s) => evaluateSession(personCtx(p, s.at), s.readings));
-      const top = maxLevel(evs.map((ev) => ev.overall));
+      const levels = groupSessions(mBy.get(p.id) || []).filter((s) => inWin(s.at))
+        .map((s) => level888(evaluateSession(personCtx(p, s.at), s.readings))).filter((l) => l !== 'na');
+      if (!levels.length) { ids.unscreened.push(p.id); continue; }
+      screened++; visits += levels.length;
+      const top = maxLevel(levels);
       if (RANK[top] < 1) continue;
-      const managed = (minRank) => (eBy.get(p.id) || []).some((e) => RANK[maxLevel([e.initialLevel || e.level, e.level])] >= minRank && e.log.some((l) => l.type === o.entry && inWin(l.at)));
       everY++;
-      if (managed(1)) mgY++; else ids.yellowUnmanaged.push(p.id);
+      const managed = (eBy.get(p.id) || []).some((e) => e.items.some((i) => KEYS_888.includes(i.key) && RANK[i.level] >= 1) && e.log.some((l) => l.type === o.entry && inWin(l.at)));
+      if (managed) mgY++; else ids.yellowUnmanaged.push(p.id);
       if (RANK[top] >= 2) {
         everO++;
-        if (greenAfterOrange(evs, o.green)) mgO++; else ids.orangeNotGreen.push(p.id);
+        if (improved888(levels, +o.downgrade || 2)) imp++; else ids.orangeNotImproved.push(p.id);
       }
     }
     const need = (k, n) => Math.max(0, Math.ceil(o.target * n - 1e-9) - k);
@@ -844,14 +850,14 @@
       opts: o, registered: persons.length, visits,
       find: Object.assign(wilson(screened, persons.length), { need: need(screened, persons.length) }),
       intervene: Object.assign(wilson(mgY, everY), { need: need(mgY, everY) }),
-      control: Object.assign(wilson(mgO, everO), { need: need(mgO, everO) }),
+      improve: Object.assign(wilson(imp, everO), { need: need(imp, everO) }),
       ids,
     };
   }
 
   const Engine = {
     LEVELS, RANK, LEVEL_LABEL, LEVEL_MEANING, ITEMS, ITEM_LABEL, SYMPTOMS, SYMPTOM_BY_LABEL, ASSUMPTIONS, DEFAULT_SLA, CLOSE_REASONS,
-    STATES, STATE_LABEL, OUTCOME_LABEL, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, GREEN_888, cascade888,
+    STATES, STATE_LABEL, OUTCOME_LABEL, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, DOWNGRADE_888, KEYS_888, cascade888,
     maxLevel, evaluateSession, groupSessions, ingest, act, nextStep, suggestJudgement, quality, wilson, prescription,
     parseRoster, parseBirth, validTwId, maskId, maskName, ageAt, addDays, sameDay, normGluType, uid,
   };

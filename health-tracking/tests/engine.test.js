@@ -157,47 +157,49 @@ t('overdue: notified but no intervention', () => {
   assert.equal(q.unclosed, 1);
 });
 
-// ── 健康 888
-t('888 find: registered vs measured at least once', () => {
+// ── 健康 888（只看三高）
+t('888 find: registered vs measured a 3-high item at least once', () => {
   const db = db0(); db.persons.push({ id: 'p2', name: 'B', sex: 'F', birth: '1950-01-01' });
   add(db, D(1), { sbp: 120, dbp: 70 });
+  db.measurements.push({ id: 'x', personId: 'p2', at: D(1), spo2: 97, temp: 36.5 }); // 非三高項目
   const c = E.cascade888(db, D(2));
-  assert.equal(c.find.k, 1); assert.equal(c.find.n, 2); assert.deepEqual(c.ids.unscreened, ['p2']); assert.equal(c.find.need, 1);
+  assert.equal(c.find.k, 1); assert.equal(c.find.n, 2); assert.deepEqual(c.ids.unscreened, ['p2']);
 });
-t('888 intervene: yellow-or-above denominator, numerator by entering management', () => {
+t('888 intervene: only 3-high abnormalities count', () => {
   const db = db0();
-  const { episode: ep } = add(db, D(1), { sbp: 150, dbp: 85 }); // 橙
-  let c = E.cascade888(db, D(2));
-  assert.equal(c.intervene.n, 1, 'orange counts in the yellow-or-above denominator');
-  assert.equal(c.intervene.k, 0, 'pending is not yet in management');
-  E.act(db, ep.id, 'notify', {}, D(3));
-  assert.equal(E.cascade888(db, D(4)).intervene.k, 1);
-  assert.equal(E.cascade888(db, D(4), { entry: 'intervened' }).intervene.k, 0, 'stricter entry definition');
+  add(db, D(1), { sbp: 120, dbp: 70, temp: 37.5, weight: 70 }); // 體溫黃、BMI 黃，但三高綠
+  assert.equal(E.cascade888(db, D(2)).intervene.n, 0);
+  const { episode: ep } = add(db, D(5), { sbp: 150, dbp: 85 });
+  let c = E.cascade888(db, D(6));
+  assert.equal(c.intervene.n, 1); assert.equal(c.intervene.k, 0);
+  E.act(db, ep.id, 'notify', {}, D(7));
+  assert.equal(E.cascade888(db, D(8)).intervene.k, 1);
+  assert.equal(E.cascade888(db, D(8), { entry: 'intervened' }).intervene.k, 0);
 });
-t('888 control: orange-or-above denominator, numerator = latest later session green', () => {
+t('888 improve: two consecutive sessions below peak, ignoring non-3-high items', () => {
   const db = db0();
-  add(db, D(1), { sbp: 150, dbp: 85, weight: 60 });
-  let c = E.cascade888(db, D(2));
-  assert.equal(c.control.n, 1); assert.equal(c.control.k, 0, 'the orange session itself is not control');
-  add(db, D(10), { sbp: 125, dbp: 75, weight: 68 }); // 血壓綠，BMI 25 黃
-  c = E.cascade888(db, D(11));
-  assert.equal(c.control.k, 0, 'overall is yellow, not green');
-  assert.equal(E.cascade888(db, D(11), { green: 'items' }).control.k, 1, 'items mode: BP back to green');
-  add(db, D(20), { sbp: 124, dbp: 74, weight: 60 });
-  assert.equal(E.cascade888(db, D(21)).control.k, 1);
-  add(db, D(30), { sbp: 145, dbp: 80, weight: 60 });
-  assert.equal(E.cascade888(db, D(31)).control.k, 0, 'relapse: latest is orange again');
+  add(db, D(1), { sbp: 150, dbp: 85 });                 // 橙
+  add(db, D(10), { sbp: 135, dbp: 75, weight: 76 });    // 三高黃（BMI 橙不影響）
+  let c = E.cascade888(db, D(11));
+  assert.equal(c.improve.n, 1); assert.equal(c.improve.k, 0, 'one lower session is not enough');
+  assert.equal(E.cascade888(db, D(11), { downgrade: 1 }).improve.k, 1, 'single-session option');
+  add(db, D(20), { sbp: 128, dbp: 76 });                // 綠
+  assert.equal(E.cascade888(db, D(21)).improve.k, 1);
 });
-t('888: yellow-only person is not in the orange denominator', () => {
+t('888 improve: rise resets the run and raises the peak', () => {
   const db = db0();
-  add(db, D(1), { sbp: 135, dbp: 70 });
-  const c = E.cascade888(db, D(2));
-  assert.equal(c.intervene.n, 1); assert.equal(c.control.n, 0); assert.equal(c.control.p, null);
+  add(db, D(1), { sbp: 150, dbp: 85 });   // 橙
+  add(db, D(5), { sbp: 135, dbp: 75 });   // 黃
+  add(db, D(10), { sbp: 182, dbp: 112 }); // 紅：新高峰
+  add(db, D(15), { sbp: 150, dbp: 85 });  // 橙（低於紅）
+  assert.equal(E.cascade888(db, D(16)).improve.k, 0);
+  add(db, D(20), { sbp: 145, dbp: 85 });  // 橙（連續第 2 次低於紅）
+  assert.equal(E.cascade888(db, D(21)).improve.k, 1);
 });
 t('888: same-session retest back to green is not counted as yellow', () => {
   const db = db0();
-  add(db, D(1, 9), { temp: 37.4 });
-  add(db, new Date(new Date(D(1, 9)).getTime() + 30 * 60000).toISOString(), { temp: 36.8 });
+  add(db, D(1, 9), { glucose: 110, glucoseType: '空腹' });
+  add(db, new Date(new Date(D(1, 9)).getTime() + 30 * 60000).toISOString(), { glucose: 95, glucoseType: '空腹' });
   assert.equal(E.cascade888(db, D(2)).intervene.n, 0);
 });
 

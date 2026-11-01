@@ -83,8 +83,8 @@ t('female body fat 36 orange', () => assert.equal(item('body', [{ weight: 52, bo
 t('male body fat 9 orange', () => assert.equal(item('body', [{ weight: 60, bodyFat: 9 }]).level, 'orange'));
 
 // ── 生活型態項目不計入整體層級
-t('body/mets excluded from overall', () => {
-  const ev = lv([{ sbp: 120, dbp: 70, weight: 80, waist: 95 }]);
+t('body excluded from overall', () => {
+  const ev = lv([{ sbp: 120, dbp: 70, weight: 80 }]);
   assert.equal(ev.items.body.level, 'orange'); assert.equal(ev.overall, 'green'); assert.equal(ev.lifestyle, 'orange');
 });
 t('lifestyle-only abnormal opens no episode', () => {
@@ -98,6 +98,12 @@ t('lifestyle items ride along in the prescription of a BP episode', () => {
   const { episode: ep } = E.ingest(db, 'p1', '2026-01-01T01:00:00Z');
   assert.equal(ep.level, 'orange'); assert.ok(E.prescription(db.persons[0], ep).includes('生活型態追蹤'));
   assert.equal(new Date(ep.due.confirm) - new Date('2026-01-01T01:00:00Z') > 20 * 864e5, true, 'lifestyle timing does not shorten BP deadlines');
+});
+
+t('MetS still counts toward overall and opens an episode with referral', () => {
+  const ev = lv([{ waist: 92, sbp: 132, dbp: 80, tg: 160, hdl: 45, glucose: 95, glucoseType: '空腹' }]);
+  assert.equal(ev.items.mets.level, 'orange'); assert.ok(!ev.items.mets.lifestyle); assert.equal(ev.overall, 'orange');
+  assert.ok(ev.items.mets.actions.some((a) => a.includes('轉介')));
 });
 
 // ── 整體層級取最高

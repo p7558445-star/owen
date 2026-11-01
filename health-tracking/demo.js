@@ -8,7 +8,7 @@
   const E = root.Engine || (typeof require !== 'undefined' ? require('./engine.js') : null);
 
   const SITES = ['頭前社區', '鶴鳴社區', '安東社區', '永芳社區', '長樂社區', '彰化教會', '金齡關懷協會', '成功社區', '向陽社區', '介壽社區', '瑪玉據點', '建寶社區', '光復社區', '阿夷社區', '鎮平社區', '寶廍社區'];
-  const NURSES = ['個管師 甲', '個管師 乙', '個管師 丙'];
+  const NURSES = '甲乙丙丁戊己庚辛'.split('').map((x) => '社區護理師 ' + x); // 8 名社區護理師
   const SUR = '陳林黃張李王吳劉蔡楊許鄭謝洪郭邱曾廖賴徐周葉蘇莊呂江何蕭羅高'.split('');
   const GF = '秀美玉麗淑金春月英珠雪鳳琴蘭桂惠素碧'.split('');
   const GM = '明志文雄國榮清德輝正義昌坤福春進財永'.split('');

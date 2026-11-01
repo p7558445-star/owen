@@ -32,7 +32,8 @@
   }
   const t888 = () => Object.assign({}, E.DEFAULT_888, (db.settings && db.settings.t888) || {});
   const sla = () => Object.assign({}, E.DEFAULT_SLA, (db.settings && db.settings.sla) || {});
-  const nurses = () => (db.settings && db.settings.nurses && db.settings.nurses.length ? db.settings.nurses : ['個管師']);
+  const DEFAULT_NURSES = '甲乙丙丁戊己庚辛'.split('').map((x) => '社區護理師 ' + x);
+  const nurses = () => (db.settings && db.settings.nurses && db.settings.nurses.length ? db.settings.nurses : DEFAULT_NURSES);
 
   // 每次渲染重建索引
   let IX = null;
@@ -650,7 +651,7 @@
         <tr><td>複測</td><td>就醫後 ${num('phoneAfterVisit', s.phoneAfterVisit)} 天電訪</td><td>${num('retest.orange', s.retest.orange)}</td><td>${num('retest.yellow', s.retest.yellow)}</td></tr>
       </tbody></table></div>
       <p class="small muted">0 表示當日。修改只影響之後新開或重新判定的追蹤案。</p>
-      <label class="f" style="margin-top:8px">個管師名單（以逗號分隔）<input type="text" id="nurses" value="${esc(nurses().join('，'))}"></label>
+      <label class="f" style="margin-top:8px">社區護理師名單（以逗號分隔）<input type="text" id="nurses" value="${esc(nurses().join('，'))}"></label>
       <div class="row" style="margin-top:8px"><button class="btn primary" id="save-set" type="button">儲存設定</button><label class="row small"><input type="checkbox" id="mask" ${ui.mask ? 'checked' : ''}>畫面遮蔽姓名（簡報／螢幕分享用）</label></div>
     </div>`;
   }
@@ -773,6 +774,8 @@
 
   db = load();
   if (!db) { db = window.Demo.generate(new Date()); save(); }
-  db.settings = db.settings || { nurses: ['個管師'] };
+  db.settings = db.settings || {};
+  // 舊版預設的「個管師」名單換成 8 名社區護理師；使用者自訂的名單不動
+  if (!db.settings.nurses || !db.settings.nurses.length || db.settings.nurses.every((n) => /^個管師/.test(n))) db.settings.nurses = DEFAULT_NURSES.slice();
   render();
 })();

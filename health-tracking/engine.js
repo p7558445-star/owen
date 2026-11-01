@@ -320,6 +320,22 @@
 
   const EVALUATORS = { bp: evalBP, pulse: evalPulse, spo2: evalSpO2, temp: evalTemp, glucose: evalGlucose, lipid: evalLipid, mets: evalMetS, body: evalBody };
 
+  // 各項目的數值（供健康處方依院內文件的數值類別選內容）
+  function itemData(key, rs, r) {
+    const last = (f) => { const v = series(rs, f); return v.length ? v[v.length - 1] : null; };
+    switch (key) {
+      case 'bp': return { sbp: last('sbp'), dbp: last('dbp') };
+      case 'pulse': return { hr: last('pulse') };
+      case 'spo2': return { x: last('spo2') };
+      case 'temp': return { x: last('temp') };
+      case 'glucose': { const g = rs.filter((m) => num(m.glucose) !== null).pop(); return { x: g ? num(g.glucose) : null, fasting: !!g && normGluType(g.glucoseType) === 'fasting', a1c: last('hba1c') }; }
+      case 'lipid': return { tc: last('tc'), tg: last('tg'), hdl: last('hdl'), ldl: last('ldl') };
+      case 'mets': { const n = parseInt(r.value, 10); return { n: isNaN(n) ? null : n }; }
+      case 'body': return { bmi: r.bmi ?? null, bf: last('bodyFat'), waist: last('waist') };
+      default: return {};
+    }
+  }
+
   /**
    * 判定一個量測場次。
    * @param person {sex:'M'|'F', age, heightCm, copd, spo2Baseline, immuno, chronic, medHTN, medDM, medLipid}
@@ -333,6 +349,7 @@
       if (r) items[it.key] = r;
     }
     for (const k of LIFESTYLE) if (items[k]) items[k].lifestyle = true;
+    for (const k of Object.keys(items)) items[k].data = itemData(k, readings, items[k]);
     const graded = Object.values(items).filter((r) => r.level !== 'na' && !r.lifestyle);
     const life = Object.values(items).filter((r) => r.level !== 'na' && r.lifestyle);
     const overall = graded.length ? maxLevel(graded.map((r) => r.level)) : 'na';
@@ -404,7 +421,7 @@
   function log(ep, at, type, text, by) { ep.log.push({ at, type, text, by: by || '系統' }); }
 
   function summarizeItems(ev) {
-    return Object.values(ev.items).filter((r) => RANK[r.level] >= 1).map((r) => ({ key: r.key, level: r.level, value: r.value, reason: r.reason, provisional: r.provisional, timing: r.lifestyle ? {} : r.timing, lifestyle: !!r.lifestyle }));
+    return Object.values(ev.items).filter((r) => RANK[r.level] >= 1).map((r) => ({ key: r.key, level: r.level, value: r.value, reason: r.reason, provisional: r.provisional, timing: r.lifestyle ? {} : r.timing, lifestyle: !!r.lifestyle, data: r.data }));
   }
 
   function newEpisode(db, person, session, ev, at, parent, sla) {
@@ -664,27 +681,52 @@
   }
 
   // ───────────────────────── 健康處方 ─────────────────────────
+  const rxLib = () => (typeof module !== 'undefined' && module.exports ? require('./rx-library.js') : root.RxLibrary);
+
+  // 單一項目的處方段落：依院內文件的數值類別；文件未涵蓋時改用系統暫用文字並標註
+  function rxSection(i, sex) {
+    const lib = rxLib();
+    const head = `■ ${ITEM_LABEL[i.key]}：${i.value}（${LEVEL_LABEL[i.level]}${i.lifestyle ? '・生活型態追蹤' : ''}）`;
+    const cats = lib ? lib.lookup(i.key, i.data, sex, true) : [];
+    if (!cats.length) {
+      const tpl = (RX[i.key] && RX[i.key][i.level]) || [];
+      return [head, '  （院內衛教文件未涵蓋此數值範圍，以下為系統暫用內容）', ...tpl.map((t) => '  ・' + t)];
+    }
+    const out = [head];
+    for (const c of cats) {
+      out.push(`  【${c.title}】`);
+      if (c.status.length) out.push('  您目前的狀況：' + c.status.join(''));
+      if (c.advice.length) { out.push('  健康建議：'); c.advice.forEach((t) => out.push('   ・' + t)); }
+      if (c.tip.length) out.push('  日常保健小提醒：' + c.tip.join(''));
+      if (c.visit.length) out.push('  就醫建議：' + c.visit.join(''));
+    }
+    return out;
+  }
+
+  function disclaimer() {
+    const lib = rxLib();
+    return lib ? ['', ...lib.DISCLAIMER.map((d) => '⚠ ' + d)] : [];
+  }
+
   function prescription(person, ep) {
     const lines = [`${person.name} 健康處方（${LEVEL_LABEL[ep.level]}層，第 ${ep.cycle} 週期）`, ''];
-    for (const i of ep.items) {
-      const tpl = RX[i.key] && RX[i.key][i.level];
-      lines.push(`■ ${ITEM_LABEL[i.key]}：${i.value}（${LEVEL_LABEL[i.level]}${i.lifestyle ? '・生活型態追蹤' : ''}）`);
-      if (tpl) tpl.forEach((t) => lines.push('  ・' + t));
-    }
-    const follow = { red: '就醫後 2 週內護理師將電話關懷確認', orange: '請於 4 週內就醫，3 個月內回健康站複測', yellow: '請於 6 個月內回健康站複測' }[ep.level];
-    lines.push('', '追蹤：' + follow);
-    if (ep.level === 'red') lines.push('如出現胸痛、呼吸困難、意識改變、言語不清或肢體無力，請立即撥打 119。');
+    const items = ep.items.slice().sort((a, b) => (a.lifestyle - b.lifestyle) || (RANK[b.level] - RANK[a.level]));
+    for (const i of items) lines.push(...rxSection(i, person.sex), '');
+    const plan = {
+      red: ['今日就醫；無症狀仍須當日就醫，護理師將於 24 小時內確認就醫。', '就醫後 2 週內護理師將電話關懷確認。', '如出現胸痛、呼吸困難、意識改變、言語不清或肢體無力，請立即撥打 119。'],
+      orange: ['請於 4 週內就醫，護理師將確認您的就醫情形。', '請於 3 個月內回健康站複測。'],
+      yellow: ['目前不需轉介就醫，請依上方建議調整生活習慣。', '請於 6 個月內回健康站複測。'],
+    }[ep.level] || [];
+    if (plan.length) { lines.push('追蹤計畫：'); plan.forEach((t) => lines.push('  ・' + t)); }
+    lines.push(...disclaimer());
     return lines.join('\n');
   }
 
   function lifestylePrescription(person, ev) {
     const its = LIFESTYLE.map((k) => ev.items[k]).filter((r) => r && RANK[r.level] >= 1);
     const lines = [`${person.name} 健康處方（生活型態追蹤）`, ''];
-    for (const i of its) {
-      lines.push(`■ ${ITEM_LABEL[i.key]}：${i.value}（${LEVEL_LABEL[i.level]}）`);
-      ((RX[i.key] && RX[i.key][i.level]) || []).forEach((t) => lines.push('  ・' + t));
-    }
-    lines.push('', '追蹤：請持續到健康站量測腰圍、體重與體脂。');
+    for (const i of its) lines.push(...rxSection(i, person.sex), '');
+    lines.push('追蹤：請持續到健康站量測腰圍、體重與體脂。', ...disclaimer());
     return lines.join('\n');
   }
 

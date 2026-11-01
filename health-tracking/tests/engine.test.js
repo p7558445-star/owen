@@ -230,6 +230,21 @@ t('888: same-session retest back to green is not counted as yellow', () => {
   assert.equal(E.cascade888(db, D(2)).intervene.n, 0);
 });
 
+// ── 健康處方（院內文件）
+t('rx uses hospital library by measured value', () => {
+  const db = { persons: [{ id: 'p1', name: 'x', sex: 'F', birth: '1950-01-01', heightCm: 155 }], measurements: [{ id: 'a', personId: 'p1', at: '2026-01-01T01:00:00Z', sbp: 145, dbp: 82, ldl: 165, tg: 120, hdl: 55 }], episodes: [] };
+  const { episode: ep } = E.ingest(db, 'p1', '2026-01-01T01:00:00Z');
+  const rx = E.prescription(db.persons[0], ep);
+  assert.ok(rx.includes('【高血壓警示】')); assert.ok(rx.includes('【LDL高風險】')); assert.ok(!rx.includes('【三酸甘油脂正常】'));
+  assert.ok(rx.includes('目前不需轉介就醫') === false && rx.includes('請於 4 週內就醫'));
+  assert.equal((rx.match(/⚠ /g) || []).length, 3, 'disclaimers once');
+});
+t('rx falls back and says so when the document has no category', () => {
+  const db = { persons: [{ id: 'p1', name: 'x', sex: 'M', birth: '1950-01-01', heightCm: 165 }], measurements: [{ id: 'a', personId: 'p1', at: '2026-01-01T01:00:00Z', temp: 37.5 }], episodes: [] };
+  const { episode: ep } = E.ingest(db, 'p1', '2026-01-01T01:00:00Z');
+  assert.ok(E.prescription(db.persons[0], ep).includes('院內衛教文件未涵蓋'));
+});
+
 // ── 統計
 t('wilson', () => { const w = E.wilson(8, 10); assert.ok(Math.abs(w.lo - 0.4902) < 0.001 && Math.abs(w.hi - 0.9433) < 0.001); });
 

@@ -633,6 +633,7 @@
       <tr><td>${lv('red')}</td><td>可能危及安全</td><td>當日處理，24 小時內確認就醫、健康處方</td><td>就醫後 2 週電訪確認</td></tr>
     </tbody></table></div><p class="small muted">整體層級取各項目中最高者，但【生活型態追蹤】項目（BMI・腰圍・體脂）不計入整體層級、不派案、不轉介，只開健康處方。只要有異常就要完成健康處方。依據：《彰基社區智慧健康站量測異常分層管理與閉環追蹤建議 v1》。</p></div>
     <div class="card" style="margin-top:12px"><h2>各項目閾值</h2><div class="tbl-wrap"><table class="small"><thead><tr><th>項目</th><th>${lv('green')}</th><th>${lv('yellow')}</th><th>${lv('orange')}</th><th>${lv('red')}</th></tr></thead><tbody>${T.map((r) => `<tr>${r.map((c, i) => (i ? `<td>${esc(c)}</td>` : `<td><strong>${esc(c)}</strong></td>`)).join('')}</tr>`).join('')}</tbody></table></div></div>
+    <div class="card" style="margin-top:12px"><h2>健康處方內容</h2><p class="small">處方內容依院內《健康處方》文件，<strong>依量測數值</strong>選擇文件中的類別（例如血壓 ≥130/80 為「高血壓警示」），並依紅橙黃綠層級附上追蹤計畫（就醫時限、複測）與三條警語。文件未涵蓋的數值範圍，會標註「院內衛教文件未涵蓋」並改用系統暫用文字。護理師開立前都可以修改。</p></div>
     <div class="card" style="margin-top:12px"><h2>閉環流程</h2><p>偵測 → 待派案 → 已通知 → 已介入（含健康處方）→ 已確認（就醫或完成處方）→ 已複測（紅層為就醫後電訪）→ 判定（降級、維持、升級、結案）</p>
       <ul class="small"><li>每一筆個案都必須走到「判定」，不能停在「已通知」。</li><li>新量測高於目前層級時立即升級並重新派案；達標後連續 2 次維持才降級。</li><li>慢性病不直接結案；結案原因限於：${E.CLOSE_REASONS.join('、')}（轉由醫師管理需登記回診日期）。</li></ul></div>
     <div class="card" style="margin-top:12px"><h2>系統解讀（請臨床委員會確認）</h2><ol class="small">${E.ASSUMPTIONS.map((a) => `<li>${esc(a)}</li>`).join('')}</ol></div>

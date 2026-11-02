@@ -687,7 +687,7 @@
   function rxSection(i, sex) {
     const lib = rxLib();
     const head = `■ ${ITEM_LABEL[i.key]}：${i.value}（${LEVEL_LABEL[i.level]}${i.lifestyle ? '・生活型態追蹤' : ''}）`;
-    const cats = lib ? lib.lookup(i.key, i.data, sex, true) : [];
+    const cats = lib ? lib.lookup(i.key, i.data, sex, true, i.level) : [];
     if (!cats.length) {
       const tpl = (RX[i.key] && RX[i.key][i.level]) || [];
       return [head, '  （院內衛教文件未涵蓋此數值範圍，以下為系統暫用內容）', ...tpl.map((t) => '  ・' + t)];
@@ -698,7 +698,7 @@
       if (c.status.length) out.push('  您目前的狀況：' + c.status.join(''));
       if (c.advice.length) { out.push('  健康建議：'); c.advice.forEach((t) => out.push('   ・' + t)); }
       if (c.tip.length) out.push('  日常保健小提醒：' + c.tip.join(''));
-      if (c.visit.length) out.push('  就醫建議：' + c.visit.join(''));
+      if (c.visit.length && (!c.visitLevels || c.visitLevels.includes(i.level))) out.push('  就醫建議：' + c.visit.join(''));
     }
     return out;
   }

@@ -13,23 +13,24 @@
     '如量測結果持續異常、出現身體不適症狀、患有慢性疾病、懷孕或特殊疾病者，建議至醫療院所由醫師或相關醫療專業人員進一步評估。',
   ];
 
-  // 每個類別：id、title、match(data, sex)、status（您目前的狀況）、advice（健康建議）、tip（日常保健小提醒）、visit（就醫建議）、normal（是否為正常類別）
+  // 血壓依院內修訂版分層選類別（綠 <140/90；黃 140–159／90–99；橙 160–179／100–109；紅 ≥180／≥110），不用文件原本的 120/80、130/80 閾值。
+  // 每個類別：id、title、match(data, sex, level)、status（您目前的狀況）、advice（健康建議）、tip（日常保健小提醒）、visit（就醫建議）、normal（是否為正常類別）
   const LIB = {
     bp: [
       {
-        id: 'bp_normal', title: '正常血壓', normal: true, match: (d) => d.sbp < 120 && d.dbp < 80,
+        id: 'bp_normal', title: '正常血壓', normal: true, match: (d, sex, lv) => lv === 'green',
         status: ['恭喜您，目前血壓維持在理想範圍內。', '血壓是反映心臟與血管健康的重要指標，維持良好的血壓狀態，有助於降低心臟病、中風、腎臟疾病等慢性疾病風險。', '持續保持健康生活習慣，是維持身體健康的重要基礎。'],
         advice: ['持續維持均衡飲食習慣。', '每天攝取足夠蔬菜與水果。', '每週至少進行150分鐘中等強度運動。', '保持規律作息及充足睡眠。', '適度放鬆心情，避免長期壓力累積。'],
         tip: ['建議持續定期健康檢查及血壓追蹤。'], visit: [],
       },
       {
-        id: 'bp_elevated', title: '血壓偏高', match: (d) => d.sbp >= 120 && d.sbp <= 129 && d.dbp < 80,
+        id: 'bp_elevated', title: '血壓偏高', match: () => false, // 文件原為 120–129／<80；修訂版分層下此範圍屬綠層，不使用
         status: ['您的血壓略高於理想範圍。', '雖然目前尚未達高血壓標準，但代表血管已開始承受較高壓力，未來發展為高血壓的風險可能增加。', '許多人在這個階段透過飲食及生活習慣調整，就有機會讓血壓恢復至理想範圍。'],
         advice: ['減少鹽分攝取。', '少吃醃製品、加工食品及速食。', '增加蔬菜、水果及高纖食物攝取。', '每週至少運動150分鐘。', '維持理想體重。', '避免熬夜及過度疲勞。'],
         tip: ['每天少一點鹽、多走一點路，都是保護血管健康的重要方法。', '健康的改變不需要一步到位，從每天進步一點開始即可。'], visit: [],
       },
       {
-        id: 'bp_high', title: '高血壓警示', match: (d) => d.sbp >= 130 || d.dbp >= 80,
+        id: 'bp_high', title: '高血壓警示', match: (d, sex, lv) => ['yellow', 'orange', 'red'].includes(lv), visitLevels: ['orange', 'red'], // 黃層不轉介，不印就醫建議
         status: ['您的血壓已超出建議範圍。', '長期血壓偏高可能增加心臟病、中風、腎臟疾病及其他慢性疾病風險。', '高血壓初期通常沒有明顯症狀，因此定期監測與及早介入相當重要。'],
         advice: ['落實低鹽飲食原則。', '增加蔬果與全穀類攝取。', '控制體重及腰圍。', '建立規律運動習慣。', '戒菸並避免過量飲酒。', '保持良好睡眠品質。'],
         tip: ['血壓控制是長期累積的成果。', '即使只是每天散步30分鐘、少喝含糖飲料，都有助於改善健康狀況。'],
@@ -198,9 +199,9 @@
   };
 
   // 回傳符合的類別（abnormalOnly 時只回傳非正常類別）
-  function lookup(key, data, sex, abnormalOnly) {
+  function lookup(key, data, sex, abnormalOnly, level) {
     if (!data || !LIB[key]) return [];
-    return LIB[key].filter((c) => (!abnormalOnly || !c.normal) && c.match(data, sex));
+    return LIB[key].filter((c) => (!abnormalOnly || !c.normal) && c.match(data, sex, level));
   }
 
   const RxLibrary = { LIB, DISCLAIMER, lookup, source: '院內《健康處方》文件（2026/11）' };

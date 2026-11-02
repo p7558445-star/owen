@@ -245,6 +245,13 @@ t('rx falls back and says so when the document has no category', () => {
   assert.ok(E.prescription(db.persons[0], ep).includes('院內衛教文件未涵蓋'));
 });
 
+t('BP prescription follows revised tiers, not the document 130/80 cut-off', () => {
+  const mk = (sbp, dbp) => { const db = { persons: [{ id: 'p1', name: 'x', sex: 'F', birth: '1950-01-01' }], measurements: [{ id: 'a', personId: 'p1', at: '2026-01-01T01:00:00Z', sbp, dbp, glucose: 110, glucoseType: '空腹' }], episodes: [] }; const { episode: ep } = E.ingest(db, 'p1', '2026-01-01T01:00:00Z'); return E.prescription(db.persons[0], ep); };
+  assert.ok(!mk(135, 85).includes('高血壓警示'), '135/85 is green: no BP section');
+  const y = mk(145, 85); assert.ok(y.includes('【高血壓警示】') && !y.includes('心臟內科接受進一步評估'), 'yellow: no referral line');
+  const o = mk(165, 85); assert.ok(o.includes('心臟內科接受進一步評估'), 'orange: referral line');
+});
+
 // ── 統計
 t('wilson', () => { const w = E.wilson(8, 10); assert.ok(Math.abs(w.lo - 0.4902) < 0.001 && Math.abs(w.hi - 0.9433) < 0.001); });
 

@@ -109,34 +109,23 @@
     void all;
     db.settings = { nurses: NURSES.slice() };
     db.rulesVersion = E.RULES_VERSION;
+    db.schema = E.SCHEMA;
     return db;
   }
 
   function simulate(db, p, nurse, from, until, end, R, stall, ignore) {
-    for (let guard = 0; guard < 8; guard++) {
-      const ep = db.episodes.find((e) => e.personId === p.id && e.state !== 'judged');
+    for (let guard = 0; guard < 4; guard++) {
+      const ep = db.episodes.find((e) => e.personId === p.id && E.isOpen(e));
       if (!ep) return;
       const base = new Date(Math.max(from, new Date(ep.levelAt || ep.detectedAt)));
       const lag = (lo, hi) => new Date(base.getTime() + (lo + R() * (hi - lo)) * DAY + R.int(1, 6) * 3600000);
       let at, action, payload = {};
       const L = ep.level;
       switch (ep.state) {
-        case 'pending': if (ignore) return; at = L === 'red' ? lag(0, R() < 0.85 ? 0.2 : 1.5) : L === 'orange' ? lag(0, 6) : lag(1, 20); action = 'notify'; payload = { method: R.pick(['電話', '電話', 'App 推播', '現場']), assignee: nurse }; break;
+        case 'detected': if (ignore) return; at = L === 'red' ? lag(0, R() < 0.85 ? 0.2 : 1.5) : L === 'orange' ? lag(0, 6) : lag(1, 20); action = 'notify'; payload = { method: R.pick(['電話', '電話', 'App 推播', '現場']), assignee: nurse }; break;
         case 'notified': if (stall) return; at = L === 'red' ? lag(0, R() < 0.8 ? 0.2 : 2) : L === 'orange' ? lag(0, 5) : lag(3, 60); action = 'intervene'; payload = { rx: E.prescription(p, ep) }; break;
         case 'intervened': at = L === 'red' ? lag(0, R() < 0.85 ? 0.8 : 3) : L === 'orange' ? (R() < 0.75 ? lag(5, 18) : lag(30, 50)) : lag(5, 70); action = 'confirm';
           payload = { visitDate: at.toISOString().slice(0, 10), facility: R.pick(['彰基本院', '鹿基', '社區診所', '家醫科診所']), result: R.pick(['已就醫，追蹤中', '開始用藥', '調整用藥', '醫師建議觀察']) }; break;
-        case 'confirmed': if (L !== 'red') return; at = new Date(new Date(ep.phone.due).getTime() - R.int(0, 5) * DAY); action = 'phone'; payload = { note: R.pick(['已規律服藥', '已回診，醫師持續追蹤', '症狀改善']) }; break;
-        case 'retested': {
-          at = lag(0, 5);
-          const s = ep.suggestion || (L === 'red' ? { outcome: R() < 0.6 ? 'close' : 'downgrade', toLevel: 'orange', reason: '已轉由醫師持續管理' } : { outcome: 'maintain', toLevel: L });
-          action = 'judge';
-          payload = { outcome: s.outcome, toLevel: s.toLevel, reason: s.reason || '' };
-          if (s.outcome === 'close') {
-            payload.reason = L === 'red' || p.chronic ? '已轉由醫師持續管理' : (s.reason || '達標回例行量測');
-            if (payload.reason === '已轉由醫師持續管理') payload.followupDate = new Date(at.getTime() + 30 * DAY).toISOString().slice(0, 10);
-          }
-          break;
-        }
         default: return;
       }
       if (at >= until || at >= end) return;

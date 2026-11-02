@@ -41,10 +41,11 @@
     const byPerson = new Map(), open = new Map(), mByP = new Map();
     for (const p of db.persons) byPerson.set(p.id, p);
     for (const m of db.measurements) { if (!mByP.has(m.personId)) mByP.set(m.personId, []); mByP.get(m.personId).push(m); }
-    for (const e of db.episodes) if (e.state !== 'judged') open.set(e.personId, e);
+    const last = new Map();
+    for (const e of db.episodes) { last.set(e.personId, e); if (E.isOpen(e)) open.set(e.personId, e); }
     const evalCache = new Map();
     IX = {
-      byPerson, open, mByP,
+      byPerson, open, last, mByP,
       sessions(pid) { return E.groupSessions(mByP.get(pid) || [], sla().sessionMinutes); },
       latest(pid) {
         if (evalCache.has(pid)) return evalCache.get(pid);
@@ -52,7 +53,9 @@
         const r = s ? { session: s, ev: E.evaluateSession(ctx(byPerson.get(pid), s.at), s.readings) } : null;
         evalCache.set(pid, r); return r;
       },
-      mgmt(pid) { const e = open.get(pid); if (e) return e.level; const l = this.latest(pid); return l ? (l.ev.overall === 'na' ? 'green' : 'green') : 'none'; },
+      // 管理層級：進行中的輪次；上一輪已確認、仍在等複測者維持該層級；其餘依是否量測過為綠或未量測
+      mgmt(pid) { const e = open.get(pid); if (e) return e.level; const x = last.get(pid); if (x && x.state === 'confirmed' && x.nextDue) return x.level; return this.latest(pid) ? 'green' : 'none'; },
+      stage(pid) { const e = open.get(pid); if (e) return E.STATE_LABEL[e.state]; const x = last.get(pid); return x && x.state === 'confirmed' && x.nextDue ? `確認・待複測 ${fmtD(x.nextDue)}` : ''; },
     };
   }
   const ctx = (p, at) => Object.assign({}, p, { age: E.ageAt(p.birth, at) });
@@ -152,7 +155,7 @@
     $('#user-sel').innerHTML = ns.map((n) => `<option ${n === ui.user ? 'selected' : ''}>${esc(n)}</option>`).join('');
     const route = (location.hash.slice(2) || 'dashboard').split('/')[0];
     const now = new Date();
-    const overdue = db.episodes.filter((e) => e.state !== 'judged' && inSite(IX.byPerson.get(e.personId)) && E.nextStep(e, now).overdue).length;
+    const overdue = db.episodes.filter((e) => E.isOpen(e) && inSite(IX.byPerson.get(e.personId)) && E.nextStep(e, now).overdue).length;
     $('#tabs').innerHTML = ROUTES.map(([k, t]) => `<a href="#/${k}" class="${route === k || (route === 'p' && k === 'residents') ? 'on' : ''}">${t}${k === 'worklist' && overdue ? ` <span class="badge" title="逾期案件">${overdue}</span>` : ''}</a>`).join('');
   }
 
@@ -160,7 +163,7 @@
     index(); shell();
     const [route, arg] = (location.hash.slice(2) || 'dashboard').split('/');
     const app = $('#app');
-    const stale = !db.demo && db.episodes.some((e) => e.state !== 'judged') && db.rulesVersion !== E.RULES_VERSION
+    const stale = !db.demo && db.episodes.some(E.isOpen) && db.rulesVersion !== E.RULES_VERSION
       ? `<div class="banner no-print row spread"><span>分層規則已更新（${E.RULES_VERSION}）。開放中的追蹤案仍是依開案當時的規則判定，可能與目前畫面上的項目層級不一致。</span><button class="btn sm primary" type="button" id="regrade-btn">依新規則重新判定</button></div>` : '';
     const banner = stale + (db.demo ? `<div class="banner no-print">目前顯示的是<strong>虛構示範資料</strong>（${db.persons.length} 位合成民眾），用來展示分層與閉環流程。正式使用請到「資料匯入」清除示範資料並匯入名冊。</div>` : '');
     const views = { dashboard, worklist, residents, p: caseView, quality: qualityView, 888: view888, import: importView, rules: rulesView };
@@ -182,7 +185,7 @@
     const ps = persons();
     const cnt = { red: 0, orange: 0, yellow: 0, green: 0, none: 0 };
     for (const p of ps) cnt[IX.mgmt(p.id)]++;
-    const openEps = db.episodes.filter((e) => e.state !== 'judged' && inSite(IX.byPerson.get(e.personId)));
+    const openEps = db.episodes.filter((e) => E.isOpen(e) && inSite(IX.byPerson.get(e.personId)));
     const od = { red: 0, orange: 0, yellow: 0 };
     for (const e of openEps) if (E.nextStep(e, now).overdue) od[e.level]++;
     const today = db.episodes.filter((e) => inSite(IX.byPerson.get(e.personId)) && E.sameDay(e.detectedAt, now) && e.cycle === 1).length;
@@ -196,7 +199,8 @@
 
     const sites = [...new Set(ps.map((p) => p.site))].sort();
     const siteRows = sites.map((s) => { const r = { name: s, total: 0, red: 0, orange: 0, yellow: 0, green: 0 }; for (const p of ps.filter((x) => x.site === s)) { const l = IX.mgmt(p.id); if (l !== 'none') { r[l]++; r.total++; } } return r; });
-    const stateRows = ['pending', 'notified', 'intervened', 'confirmed', 'retested'].map((st) => ({ name: E.STATE_LABEL[st], v: openEps.filter((e) => e.state === st).length }));
+    const waiting = E.recheckOverdue(db, now).filter((e) => inSite(IX.byPerson.get(e.personId)));
+    const stateRows = E.OPEN_STATES.map((st) => ({ name: '停在' + E.STATE_LABEL[st], v: openEps.filter((e) => e.state === st).length })).concat([{ name: '待回站複測', v: waiting.length, cls: 'yellow' }]);
     const q = E.quality(db, now, ui.qWindow, (e) => inSite(IX.byPerson.get(e.personId)));
     let screened = 0, totalVisits = 0;
     for (const p of ps) { const n = IX.sessions(p.id).length; if (n) { screened++; totalVisits += n; } }
@@ -225,7 +229,7 @@
           <div><div class="muted small">今日新偵測異常</div><div class="k-val tnum" style="font-size:24px;font-weight:700">${today}</div></div>
           <div><div class="muted small">本月量測人次</div><div class="k-val tnum" style="font-size:24px;font-weight:700">${visits}</div></div>
         </div></div>
-        <div class="card"><h2>開放追蹤案停留階段</h2><p class="small muted" style="margin:0 0 6px">每一案都必須走到「判定」，不能停在「已通知」</p>${simpleBars(stateRows, ' 案')}</div>
+        <div class="card"><h2>追蹤進度</h2><p class="small muted" style="margin:0 0 6px">每一輪：偵測 → 通知 → 介入 → 確認；確認後到期回站複測，再開始下一輪</p>${simpleBars(stateRows, ' 案')}</div>
       </div>
     </div>
     <div class="grid g2" style="margin-top:12px">
@@ -234,7 +238,7 @@
         <div id="site-tbl" hidden><div class="tbl-wrap"><table><thead><tr><th>據點</th>${LV_ORDER.map((l) => `<th class="num">${E.LEVEL_LABEL[l]}</th>`).join('')}<th class="num">合計</th></tr></thead><tbody>${siteRows.map((r) => `<tr><td>${esc(r.name)}</td>${LV_ORDER.map((l) => `<td class="num">${r[l]}</td>`).join('')}<td class="num">${r.total}</td></tr>`).join('')}</tbody></table></div></div>
       </div>
       <div class="card"><div class="row spread"><h2>品質指標（近 ${ui.qWindow} 天）</h2><a href="#/quality" class="small">詳細 →</a></div>
-        <div class="grid g2">${[['紅層當日處理率', q.redSameDay], ['橙層就醫確認率', q.orangeConfirm], ['複測完成率', q.retest], ['降級（達標）率', q.improve]].map(([t, w]) => `<div><div class="muted small">${t}</div><div class="tnum" style="font-size:22px;font-weight:700">${pct(w)}</div><div class="small muted tnum">${w.k}/${w.n}　${ci(w)}</div></div>`).join('')}</div>
+        <div class="grid g2">${[['紅層當日處理率', q.redSameDay], ['橙層就醫確認率', q.orangeConfirm], ['複測完成率', q.retest], ['降級（改善）率', q.improve]].map(([t, w]) => `<div><div class="muted small">${t}</div><div class="tnum" style="font-size:22px;font-weight:700">${pct(w)}</div><div class="small muted tnum">${w.k}/${w.n}　${ci(w)}</div></div>`).join('')}</div>
         <p class="small" style="margin:10px 0 0">未閉環逾期個案：<strong class="${q.unclosed ? 'overdue' : ''}">${q.unclosed}</strong> 案</p>
       </div>
     </div>`;
@@ -243,7 +247,7 @@
   // ───────────── 工作清單 ─────────────
   function worklistRows() {
     const now = new Date(), f = ui.wl, q = f.q.trim();
-    return db.episodes.filter((e) => e.state !== 'judged').map((e) => ({ e, p: IX.byPerson.get(e.personId), s: E.nextStep(e, now) }))
+    return db.episodes.filter(E.isOpen).map((e) => ({ e, p: IX.byPerson.get(e.personId), s: E.nextStep(e, now) }))
       .filter(({ e, p, s }) => p && inSite(p) && (!f.levels.length || f.levels.includes(e.level)) && (f.state === 'all' || e.state === f.state) && (!f.overdue || s.overdue) && (!f.mine || e.assignee === ui.user)
         && (!q || p.name.includes(q) || (p.nationalId || '').includes(q.toUpperCase()) || (p.demoId || '').includes(q.toUpperCase())))
       .sort((a, b) => (b.s.overdue - a.s.overdue) || E.RANK[b.e.level] - E.RANK[a.e.level] || (new Date(a.s.due || 8.64e15) - new Date(b.s.due || 8.64e15)));
@@ -253,7 +257,7 @@
     return `<h1>追蹤工作清單</h1>
     <div class="filters">
       <div class="chips" role="group" aria-label="層級">${['red', 'orange', 'yellow'].map((l) => `<button type="button" class="chip" data-lvf="${l}" aria-pressed="${f.levels.includes(l)}">${E.LEVEL_LABEL[l]}層</button>`).join('')}</div>
-      <select id="wl-state" aria-label="階段"><option value="all">全部階段</option>${['pending', 'notified', 'intervened', 'confirmed', 'retested'].map((s) => `<option value="${s}" ${f.state === s ? 'selected' : ''}>${E.STATE_LABEL[s]}</option>`).join('')}</select>
+      <select id="wl-state" aria-label="階段"><option value="all">全部階段</option>${E.OPEN_STATES.map((s) => `<option value="${s}" ${f.state === s ? 'selected' : ''}>${E.STATE_LABEL[s]}</option>`).join('')}</select>
       <label class="row small"><input type="checkbox" id="wl-od" ${f.overdue ? 'checked' : ''}>只看逾期</label>
       <label class="row small"><input type="checkbox" id="wl-mine" ${f.mine ? 'checked' : ''}>只看派給我</label>
       <input type="search" id="wl-q" placeholder="搜尋姓名或證號" value="${esc(f.q)}">
@@ -261,12 +265,14 @@
       <button class="btn sm" id="wl-export" type="button">匯出 CSV</button>
     </div>
     ${rows.length ? `<div class="tbl-wrap"><table><thead><tr><th>層級</th><th>民眾</th><th>據點</th><th>異常項目（目前層級）</th><th>階段</th><th>下一步</th><th>期限</th><th>負責</th></tr></thead><tbody>
-    ${rows.map(({ e, p, s }) => `<tr class="click" data-href="#/p/${p.id}"><td>${lv(e.level)}${e.provisional ? ' <span class="tag warn" data-tip="單次量測，需重測確認">暫定</span>' : ''}${e.emergency ? ' <span class="tag bad">急</span>' : ''}${e.cycle > 1 ? `<div class="small muted">第 ${e.cycle} 週期</div>` : ''}</td>
+    ${rows.map(({ e, p, s }) => `<tr class="click" data-href="#/p/${p.id}"><td>${lv(e.level)}${e.provisional ? ' <span class="tag warn" data-tip="單次量測，需重測確認">暫定</span>' : ''}${e.emergency ? ' <span class="tag bad">急</span>' : ''}${e.cycle > 1 ? `<div class="small muted">第 ${e.cycle} 輪</div>` : ''}</td>
       <td><strong>${esc(pname(p))}</strong><div class="small muted">${esc(pid2(p))}・${p.sex === 'M' ? '男' : p.sex === 'F' ? '女' : '—'} ${E.ageAt(p.birth, new Date()) ?? '—'} 歲</div></td>
       <td class="small">${esc(p.site)}</td>
       <td class="small">${e.items.map((i) => `<span class="lv ${i.level}" style="margin:0 4px 4px 0" data-tip="${esc(`${i.value}｜${i.reason}${i.lifestyle ? '｜生活型態追蹤，不轉介' : ''}`)}">${E.ITEM_LABEL[i.key]}${i.lifestyle ? '・生活' : ''}</span>`).join('')}</td>
       <td class="small">${E.STATE_LABEL[e.state]}</td><td class="small">${esc(s.label)}</td><td class="small">${dueText(s)}</td><td class="small">${esc(e.assignee || '未派')}</td></tr>`).join('')}
-    </tbody></table></div>` : '<div class="card empty">沒有符合條件的追蹤案</div>'}`;
+    </tbody></table></div>` : '<div class="card empty">沒有符合條件的追蹤案</div>'}
+    ${(() => { const now = new Date(), w = E.recheckOverdue(db, now).map((e) => ({ e, p: IX.byPerson.get(e.personId) })).filter(({ p }) => p && inSite(p)).sort((a, b) => new Date(a.e.nextDue) - new Date(b.e.nextDue));
+      return `<h2 style="margin-top:20px">待回站複測 <span class="muted small">${w.length} 人・上一輪已確認、複測日已過，請通知民眾回站量測</span></h2>${w.length ? `<div class="tbl-wrap"><table><thead><tr><th>上一輪</th><th>民眾</th><th>據點</th><th>複測日</th><th>負責</th></tr></thead><tbody>${w.map(({ e, p }) => `<tr class="click" data-href="#/p/${p.id}"><td>${lv(e.level)} <span class="small muted">第 ${e.cycle} 輪</span></td><td><strong>${esc(pname(p))}</strong><div class="small muted">${esc(pid2(p))}</div></td><td class="small">${esc(p.site)}</td><td class="small">${dueText(E.nextStep(e, now))}</td><td class="small">${esc(e.assignee || '—')}</td></tr>`).join('')}</tbody></table></div>` : '<div class="card empty">目前沒有逾期未回站的民眾</div>'}`; })()}`;
   }
 
   // ───────────── 民眾名冊 ─────────────
@@ -283,7 +289,7 @@
       <span class="muted small" style="margin-left:auto">${rows.length} 人</span>
     </div>
     <div class="tbl-wrap"><table><thead><tr><th>管理層級</th><th>民眾</th><th>據點</th><th>最近量測</th>${E.ITEMS.map((i) => `<th title="${i.label}" style="text-align:center">${SHORT[i.key]}</th>`).join('')}<th>追蹤階段</th></tr></thead><tbody>
-    ${shown.map(({ p, m, l }) => { const e = IX.open.get(p.id); return `<tr class="click" data-href="#/p/${p.id}"><td>${m === 'none' ? '<span class="lv na">未量測</span>' : lv(m)}</td><td><strong>${esc(pname(p))}</strong><div class="small muted">${esc(pid2(p))}</div></td><td class="small">${esc(p.site)}</td><td class="small tnum">${l ? fmtD(l.session.at) : '—'}</td>${E.ITEMS.map((i) => `<td style="text-align:center">${l ? dot(l.ev.items[i.key]) : dot(null)}</td>`).join('')}<td class="small">${e ? E.STATE_LABEL[e.state] : '<span class="muted">—</span>'}</td></tr>`; }).join('')}
+    ${shown.map(({ p, m, l }) => { const e = IX.open.get(p.id); return `<tr class="click" data-href="#/p/${p.id}"><td>${m === 'none' ? '<span class="lv na">未量測</span>' : lv(m)}</td><td><strong>${esc(pname(p))}</strong><div class="small muted">${esc(pid2(p))}</div></td><td class="small">${esc(p.site)}</td><td class="small tnum">${l ? fmtD(l.session.at) : '—'}</td>${E.ITEMS.map((i) => `<td style="text-align:center">${l ? dot(l.ev.items[i.key]) : dot(null)}</td>`).join('')}<td class="small">${IX.stage(p.id) || '<span class="muted">—</span>'}</td></tr>`; }).join('')}
     </tbody></table></div>
     ${rows.length > shown.length ? `<p class="row"><button class="btn" id="rs-more" type="button">再顯示 200 人</button></p>` : ''}
     <p class="small muted">表格中的小方塊為最近一次量測各項目的層級（綠／黃／橙／紅，「–」為資料不足）；管理層級則以開放中的追蹤案為準。</p>`;
@@ -295,7 +301,8 @@
     if (!p) return '<div class="card empty">找不到此民眾</div>';
     const now = new Date();
     const l = IX.latest(id), ep = IX.open.get(id);
-    const past = db.episodes.filter((e) => e.personId === id && e.state === 'judged').sort((a, b) => new Date(b.detectedAt) - new Date(a.detectedAt));
+    const past = db.episodes.filter((e) => e.personId === id && !E.isOpen(e)).sort((a, b) => new Date(b.detectedAt) - new Date(a.detectedAt));
+    const lastEp = IX.last.get(id);
     const sessions = IX.sessions(id);
     const evs = sessions.map((s) => ({ s, ev: E.evaluateSession(ctx(p, s.at), s.readings) }));
     const age = E.ageAt(p.birth, now);
@@ -310,7 +317,7 @@
     ${ep && ep.emergency ? `<div class="banner danger">⚠ 有警示症狀：依規範有症狀者立即撥 119，並於當日確認就醫。</div>` : ''}
     <div class="grid g-side">
       <div class="stack">
-        ${ep ? episodeCard(p, ep, now) : `<div class="card"><h2>追蹤狀態</h2><p>${lv(l ? (l.ev.overall === 'na' ? 'na' : l.ev.overall) : 'na')} 目前沒有開放中的追蹤案。${l && E.RANK[l.ev.overall] <= 0 ? '回饋與例行量測即可。' : ''}</p></div>`}
+        ${ep ? episodeCard(p, ep, now) : waitCard(p, lastEp, l, now)}
         ${l && E.RANK[l.ev.lifestyle] >= 1 ? `<div class="card" style="border-left:4px solid var(--lv-${l.ev.lifestyle})"><div class="row spread"><h2 style="margin:0">生活型態追蹤 ${lv(l.ev.lifestyle)}</h2><button class="btn sm no-print" type="button" id="life-rx">列印生活型態處方</button></div>
           <p class="small" style="margin:6px 0 0">${E.LIFESTYLE.map((k) => l.ev.items[k]).filter((r) => r && E.RANK[r.level] >= 1).map((r) => `${r.label}：${esc(r.value)}（${E.LEVEL_LABEL[r.level]}）`).join('；')}</p>
           <p class="small muted" style="margin:4px 0 0">只開健康處方，不派案、不轉介，也不計入整體層級。${ep ? '已併入目前追蹤案的健康處方。' : ''}</p></div>` : ''}
@@ -348,8 +355,8 @@
           ${p.copd ? `<label class="f" style="margin-top:8px">慢性肺病個人血氧基線（%）<input type="number" id="spo2-base" value="${p.spo2Baseline ?? ''}" min="80" max="100"></label>` : ''}
           <p class="small muted">已服藥者於代謝症候群該項視為符合；高齡（≥65）、免疫低下、慢性病者發燒須當日就醫。</p>
         </div>
-        <div class="card"><h2>追蹤週期紀錄</h2>
-          ${past.length ? past.map((e) => `<details style="margin-bottom:6px"><summary>${lv(e.initialLevel)} 第 ${e.cycle} 週期・${fmtD(e.detectedAt)}・${E.OUTCOME_LABEL[e.judge.outcome]}${e.judge.reason ? '（' + esc(e.judge.reason) + '）' : ''}</summary>${timeline(e)}${e.rx ? `<div class="rx small" style="margin-top:6px">${esc(e.rx.text)}</div>` : ''}</details>`).join('') : '<p class="muted small">尚無已判定的週期</p>'}
+        <div class="card"><h2>歷次追蹤</h2>
+          ${past.length ? past.map((e) => `<details style="margin-bottom:6px"><summary>${lv(e.level)} 第 ${e.cycle} 輪・${fmtD(e.detectedAt)}・${e.state === 'closed' ? `結案（${esc(e.close.reason)}）` : `已確認${e.recheck ? `・複測 ${E.LEVEL_LABEL[e.recheck.level]}層` : e.nextDue ? `・待複測 ${fmtD(e.nextDue)}` : ''}`}</summary>${timeline(e)}${e.rx ? `<div class="rx small" style="margin-top:6px">${esc(e.rx.text)}</div>` : ''}</details>`).join('') : '<p class="muted small">尚無已完成的追蹤</p>'}
         </div>
       </div>
     </div>`;
@@ -357,56 +364,59 @@
 
   function timeline(e) { return `<ul class="timeline">${e.log.slice().reverse().map((x) => `<li><time class="tnum">${fmtDT(x.at)}</time>${esc(x.text)} <span class="muted small">${esc(x.by)}</span></li>`).join('')}</ul>`; }
 
+  const STEPS = ['detected', 'notified', 'intervened', 'confirmed'];
+  function stepper(state) {
+    const ci = STEPS.indexOf(state);
+    return `<div class="stepper" aria-label="追蹤步驟">${STEPS.map((st, i) => `<div class="step ${i < ci || state === 'confirmed' ? 'done' : i === ci ? 'cur' : ''}">${E.STATE_LABEL[st]}</div>`).join('')}</div>`;
+  }
+
+  // 沒有進行中的輪次時：顯示上一輪完成、等待複測，或目前不需追蹤
+  function waitCard(p, last, l, now) {
+    if (last && last.state === 'confirmed' && last.nextDue) {
+      const s = E.nextStep(last, now);
+      return `<div class="card" style="border-left:4px solid var(--lv-${last.level})">
+        <div class="row spread"><h2 style="margin:0">${lv(last.level)} 第 ${last.cycle} 輪已完成</h2><span class="small muted">確認於 ${fmtD(last.confirm && last.confirm.at)}</span></div>
+        ${stepper('confirmed')}
+        <div class="grid g2" style="margin-top:10px"><div><h3>下一步：${esc(s.label)}</h3><div class="small">${dueText(s)}</div></div>
+        <p class="small muted" style="margin:0">民眾回站量測後，系統自動判斷：升高立即開始下一輪；複測日後仍異常則開始下一輪（最近 2 次量測取較高者）；連續 2 次綠層則回到例行量測。</p></div>
+        <div class="row" style="margin-top:10px"><button class="btn" type="button" id="add-m2">登錄複測量測</button></div></div>`;
+    }
+    return `<div class="card"><h2>追蹤狀態</h2><p>${lv(l ? (l.ev.overall === 'na' ? 'na' : l.ev.overall) : 'na')} 目前沒有進行中的追蹤。${l && E.RANK[l.ev.overall] <= 0 ? '回饋與例行量測即可。' : ''}</p></div>`;
+  }
+
   function episodeCard(p, ep, now) {
     const s = E.nextStep(ep, now);
-    const order = ['detected', 'pending', 'notified', 'intervened', 'confirmed', 'retested', 'judged'];
-    const ci = order.indexOf(ep.state);
-    const steps = order.map((st, i) => `<div class="step ${i < ci ? 'done' : i === ci ? 'cur' : ''}">${E.STATE_LABEL[st]}</div>`).join('');
     const nurseOpts = nurses().map((n) => `<option ${n === (ep.assignee || ui.user) ? 'selected' : ''}>${esc(n)}</option>`).join('');
     const needVisit = E.RANK[ep.level] >= 2;
     let form = '';
     switch (ep.state) {
-      case 'pending':
-        form = `<div class="form-grid"><label class="f">派案給<select name="assignee">${nurseOpts}</select></label><label class="f">通知方式<select name="method"><option>電話</option><option>App 推播</option><option>現場</option><option>家訪</option><option>簡訊</option></select></label></div>
+      case 'detected':
+        form = `<div class="form-grid"><label class="f">負責護理師<select name="assignee">${nurseOpts}</select></label><label class="f">通知方式<select name="method"><option>電話</option><option>App 推播</option><option>現場</option><option>家訪</option><option>簡訊</option></select></label></div>
           <label class="f" style="margin-top:8px">通知內容／備註<input type="text" name="note" placeholder="例：已電話告知量測結果與就醫建議"></label>
-          <button class="btn primary" style="margin-top:10px" data-act="notify">派案並記錄已通知</button>`; break;
+          <button class="btn primary" style="margin-top:10px" data-act="notify">完成通知</button>`; break;
       case 'notified':
         form = `<label class="f">健康處方（必填，可修改）<textarea name="rx">${esc(E.prescription(p, ep))}</textarea></label>
           <label class="f" style="margin-top:8px">介入紀錄<input type="text" name="note" placeholder="例：衛教飲食與運動、評估用藥狀況"></label>
-          <div class="row" style="margin-top:10px"><button class="btn primary" data-act="intervene">完成介入與健康處方</button><button class="btn" data-print-rx>列印處方</button></div>`; break;
+          <div class="row" style="margin-top:10px"><button class="btn primary" data-act="intervene">完成介入（開立健康處方）</button><button class="btn" data-print-rx>列印處方</button></div>`; break;
       case 'intervened':
         form = needVisit ? `<div class="form-grid"><label class="f">就醫日期<input type="date" name="visitDate" required></label><label class="f">就醫院所／科別<input type="text" name="facility" placeholder="彰基家醫科"></label></div>
           <label class="f" style="margin-top:8px">就醫結果<input type="text" name="result" placeholder="例：開始用藥、安排心電圖"></label>
           <button class="btn primary" style="margin-top:10px" data-act="confirm">確認已就醫</button>`
           : `<p class="small">黃層：確認民眾已收到並理解健康處方（衛教完成）。</p><label class="f">備註<input type="text" name="result"></label><button class="btn primary" style="margin-top:10px" data-act="confirm">確認完成健康處方</button>`; break;
-      case 'confirmed':
-        form = ep.level === 'red'
-          ? `<p class="small">就醫日：${esc(ep.confirm.visitDate || '')}。請於 ${fmtD(ep.phone && ep.phone.due)} 前電訪。</p><label class="f">電訪內容<input type="text" name="note" placeholder="例：已規律服藥，症狀改善"></label><button class="btn primary" style="margin-top:10px" data-act="phone">完成電訪確認</button>`
-          : `<p class="small">等待民眾於 <strong>${fmtD(ep.due.retest)}</strong> 前回健康站複測；新量測回傳後會自動進入「已複測」。</p><button class="btn" type="button" id="add-m2">手動登錄複測</button>`; break;
-      case 'retested': {
-        const sg = ep.suggestion;
-        form = `${ep.retest && ep.retest.level ? `<p class="small">複測結果：${lv(ep.retest.level)}（${fmtD(ep.retest.at)}）</p>` : ''}${sg ? `<p class="small banner" style="margin:6px 0">系統建議：${esc(sg.text)}</p>` : ''}
-          <div class="form-grid"><label class="f">判定<select name="outcome" id="j-out">${Object.entries(E.OUTCOME_LABEL).map(([k, v]) => `<option value="${k}" ${sg && sg.outcome === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
-          <label class="f">新層級<select name="toLevel">${LV_ORDER.map((x) => `<option value="${x}" ${(sg ? sg.toLevel : ep.level) === x ? 'selected' : ''}>${E.LEVEL_LABEL[x]}</option>`).join('')}</select></label>
-          <label class="f">結案原因<select name="reason"><option value="">（非結案免填）</option>${E.CLOSE_REASONS.map((r) => `<option ${sg && sg.reason === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
-          <label class="f">回診日期（轉由醫師管理必填）<input type="date" name="followupDate"></label></div>
-          <p class="small muted">達標後連續 2 次維持才降級；慢性病不直接結案，請選「已轉由醫師持續管理」並登記回診日期。維持／升級／降級（非綠）會自動開啟下一追蹤週期。</p>
-          <button class="btn primary" data-act="judge">送出判定</button>`; break;
-      }
     }
-    const dueRows = [['通知', ep.due.notify, ep.notify && ep.notify.at], ['介入＋處方', ep.due.intervene, ep.intervene && ep.intervene.at], [needVisit ? '確認就醫' : '確認處方', ep.due.confirm, ep.confirm && ep.confirm.at], ep.level === 'red' ? ['電訪', ep.phone && ep.phone.due, ep.phone && ep.phone.at] : ['複測', ep.due.retest, ep.retest && ep.retest.at]];
+    const dueRows = [['通知', ep.due.notify, ep.notify && ep.notify.at], ['介入（健康處方）', ep.due.intervene, ep.intervene && ep.intervene.at], [needVisit ? '確認就醫' : '確認處方', ep.due.confirm, ep.confirm && ep.confirm.at]];
     return `<div class="card" style="border-left:4px solid var(--lv-${ep.level})">
-      <div class="row spread"><h2 style="margin:0">${lv(ep.level)} 追蹤中・第 ${ep.cycle} 週期${ep.provisional ? ' <span class="tag warn">暫定，需重測確認</span>' : ''}</h2><span class="small muted">偵測 ${fmtDT(ep.detectedAt)}・負責 ${esc(ep.assignee || '未派')}</span></div>
+      <div class="row spread"><h2 style="margin:0">${lv(ep.level)} 追蹤中・第 ${ep.cycle} 輪${ep.provisional ? ' <span class="tag warn">暫定，需重測確認</span>' : ''}</h2><span class="small muted">偵測 ${fmtDT(ep.detectedAt)}・負責 ${esc(ep.assignee || '未指定')}</span></div>
       <p class="small" style="margin:6px 0">${esc(E.LEVEL_MEANING[ep.level])}</p>
       <div class="chips" style="margin-bottom:8px">${ep.items.map((i) => `<span class="lv ${i.level}" data-tip="${esc(i.reason)}">${E.ITEM_LABEL[i.key]} ${esc(i.value)}</span>`).join('')}</div>
-      <div class="stepper" aria-label="閉環流程">${steps}</div>
+      ${stepper(ep.state)}
       <div class="grid g2" style="margin-top:10px">
         <div><h3>下一步：${esc(s.label)}</h3><div class="small">${dueText(s)}</div></div>
-        <div class="tbl-wrap"><table class="small"><thead><tr><th>節點</th><th>期限</th><th>完成</th></tr></thead><tbody>${dueRows.map(([n, d, done]) => `<tr><td>${n}</td><td class="tnum">${d ? fmtD(d) : '—'}</td><td class="tnum">${done ? '✓ ' + fmtD(done) : (d && new Date(d) < now ? '<span class="overdue">逾期</span>' : '—')}</td></tr>`).join('')}</tbody></table></div>
+        <div class="tbl-wrap"><table class="small"><thead><tr><th>步驟</th><th>期限</th><th>完成</th></tr></thead><tbody>${dueRows.map(([n, d, done]) => `<tr><td>${n}</td><td class="tnum">${d ? fmtD(d) : '—'}</td><td class="tnum">${done ? '✓ ' + fmtD(done) : (d && new Date(d) < now ? '<span class="overdue">逾期</span>' : '—')}</td></tr>`).join('')}</tbody></table></div>
       </div>
       <form id="ep-form" class="no-print" style="margin-top:12px" onsubmit="return false">${form}</form>
-      <details class="no-print" style="margin-top:12px"><summary class="small">提前結案（死亡、遷出、失聯、拒絕）</summary>
-        <div class="row" style="margin-top:8px"><select id="close-reason">${['失聯', '拒絕', '遷出', '死亡'].map((r) => `<option>${r}</option>`).join('')}</select><input type="text" id="close-note" placeholder="說明（如：3 次電訪未接）"><button class="btn danger" type="button" id="close-btn">結案</button></div>
+      <details class="no-print" style="margin-top:12px"><summary class="small">結案（轉由醫師持續管理、死亡、遷出、失聯、拒絕）</summary>
+        <div class="row" style="margin-top:8px"><select id="close-reason">${['已轉由醫師持續管理', '失聯', '拒絕', '遷出', '死亡'].map((r) => `<option>${r}</option>`).join('')}</select><input type="date" id="close-followup" title="轉由醫師管理時填回診日期"><input type="text" id="close-note" placeholder="說明（如：3 次電訪未接）"><button class="btn danger" type="button" id="close-btn">結案</button></div>
       </details>
       ${ep.rx ? `<details style="margin-top:8px"><summary class="small">健康處方</summary><div class="rx">${esc(ep.rx.text)}</div><button class="btn sm" type="button" data-print-rx style="margin-top:6px">列印</button></details>` : ''}
       <details style="margin-top:8px" open><summary class="small">處理紀錄</summary>${timeline(ep)}</details>
@@ -456,10 +466,10 @@
     const f = (e) => inSite(IX.byPerson.get(e.personId));
     const q = E.quality(db, now, w, f);
     const defs = {
-      redSameDay: ['紅層當日處理率', '分母：期間內初判為紅層的追蹤週期；分子：偵測當日即完成「已介入」者。'],
+      redSameDay: ['紅層當日處理率', '分母：期間內初判為紅層的追蹤輪次；分子：偵測當日即完成「介入」者。'],
       orangeConfirm: ['橙層就醫確認率', '分母：初判橙層且 4 週期限已到或已確認者（排除死亡、遷出）；分子：期限內確認就醫者。'],
-      retest: ['複測完成率', '分母：黃／橙層複測期限已到者（排除死亡、遷出）；分子：已有複測紀錄者。'],
-      improve: ['降級（達標）率', '分母：期間內完成臨床判定者（排除死亡、遷出、失聯、拒絕、同場次重測正常）；分子：判定降級或達標結案者。'],
+      retest: ['複測完成率', '分母：已確認、且複測日已過的輪次；分子：之後有回站量測者（含複測日前就升高而開新輪者）。'],
+      improve: ['降級（改善）率', '分母：已有複測結果的輪次；分子：複測層級低於本輪者（降級須連續 2 次較低）。'],
     };
     const sites = [...new Set(persons().map((p) => p.site))].sort();
     const bySite = sites.map((s) => ({ s, q: E.quality(db, now, w, (e) => { const p = IX.byPerson.get(e.personId); return p && p.site === s; }) }));
@@ -472,7 +482,7 @@
       <div class="card"><h2>未閉環個案：${q.unclosed} 案逾期（開放中共 ${q.openCount} 案）</h2>${reasons.length ? simpleBars(reasons, ' 案') : '<div class="empty">沒有逾期未閉環個案</div>'}<p class="small muted">依目前停留階段與逾期節點分類。</p></div>
       <div class="card"><h2>結案原因</h2>${close.length ? simpleBars(close, ' 案') : '<div class="empty">期間內無結案</div>'}<p class="small muted">結案原因限：${E.CLOSE_REASONS.join('、')}。</p></div>
     </div>
-    <div class="card" style="margin-top:12px"><h2>各據點</h2><div class="tbl-wrap"><table><thead><tr><th>據點</th><th class="num">追蹤週期</th>${Object.values(defs).map(([t]) => `<th class="num">${t}</th>`).join('')}<th class="num">未閉環逾期</th></tr></thead><tbody>
+    <div class="card" style="margin-top:12px"><h2>各據點</h2><div class="tbl-wrap"><table><thead><tr><th>據點</th><th class="num">追蹤輪次</th>${Object.values(defs).map(([t]) => `<th class="num">${t}</th>`).join('')}<th class="num">未閉環逾期</th></tr></thead><tbody>
       ${bySite.map(({ s, q }) => `<tr><td>${esc(s)}</td><td class="num">${q.episodes}</td>${Object.keys(defs).map((k) => `<td class="num" data-tip="${esc(ci(q[k]) || '分母為 0')}">${pct(q[k])}<span class="muted small"> ${q[k].k}/${q[k].n}</span></td>`).join('')}<td class="num ${q.unclosed ? 'overdue' : ''}">${q.unclosed}</td></tr>`).join('')}
     </tbody></table></div>
     <p class="small muted">95% 信賴區間採 Wilson score 法。各據點分母多半很小（常 &lt;30），區間很寬，跨據點排名請看區間是否重疊，不要只比點估計。</p></div>`;
@@ -573,7 +583,7 @@
 
   function commitRoster() {
     if (!pendingRoster) return;
-    if (db.demo) { db = { persons: [], measurements: [], episodes: [], settings: db.settings, rulesVersion: E.RULES_VERSION }; }
+    if (db.demo) { db = { persons: [], measurements: [], episodes: [], settings: db.settings, rulesVersion: E.RULES_VERSION, schema: E.SCHEMA }; }
     const byId = new Map(db.persons.filter((p) => p.nationalId).map((p) => [p.nationalId, p]));
     let add = 0, upd = 0;
     for (const r of pendingRoster.all) {
@@ -643,8 +653,12 @@
     </tbody></table></div><p class="small muted">整體層級取各項目中最高者，但【生活型態追蹤】項目（BMI・腰圍・體脂）不計入整體層級、不派案、不轉介，只開健康處方。只要有異常就要完成健康處方。依據：《彰基社區智慧健康站量測異常分層管理與閉環追蹤建議 v1》。</p></div>
     <div class="card" style="margin-top:12px"><h2>各項目閾值</h2><div class="tbl-wrap"><table class="small"><thead><tr><th>項目</th><th>${lv('green')}</th><th>${lv('yellow')}</th><th>${lv('orange')}</th><th>${lv('red')}</th></tr></thead><tbody>${T.map((r) => `<tr>${r.map((c, i) => (i ? `<td>${esc(c)}</td>` : `<td><strong>${esc(c)}</strong></td>`)).join('')}</tr>`).join('')}</tbody></table></div></div>
     <div class="card" style="margin-top:12px"><h2>健康處方內容</h2><p class="small">處方內容依院內《健康處方》文件，<strong>依量測數值</strong>選擇文件中的類別（例如 LDL 160–189 為「LDL高風險」）；血壓例外，依院內修訂版分層選擇：黃、橙、紅層都用「高血壓警示」，黃層不印轉介的就醫建議，並依紅橙黃綠層級附上追蹤計畫（就醫時限、複測）與三條警語。文件未涵蓋的數值範圍，會標註「院內衛教文件未涵蓋」並改用系統暫用文字。護理師開立前都可以修改。</p></div>
-    <div class="card" style="margin-top:12px"><h2>閉環流程</h2><p>偵測 → 待派案 → 已通知 → 已介入（含健康處方）→ 已確認（就醫或完成處方）→ 已複測（紅層為就醫後電訪）→ 判定（降級、維持、升級、結案）</p>
-      <ul class="small"><li>每一筆個案都必須走到「判定」，不能停在「已通知」。</li><li>新量測高於目前層級時立即升級並重新派案；達標後連續 2 次維持才降級。</li><li>慢性病不直接結案；結案原因限於：${E.CLOSE_REASONS.join('、')}（轉由醫師管理需登記回診日期）。</li></ul></div>
+    <div class="card" style="margin-top:12px"><h2>追蹤流程</h2><p><strong>偵測 → 通知 → 介入（健康處方）→ 確認（就醫或完成處方）</strong>，四步驟反覆進行。</p>
+      <ul class="small"><li>每一輪都必須走到「確認」，不能停在「通知」。</li>
+      <li>確認後設定複測日：黃層 6 個月、橙層 3 個月、紅層就醫後 2 週（電訪並請回站）。</li>
+      <li>下一輪自動開始：量測高於本輪層級時立即開始；複測日後回站仍異常則開始，層級取最近 2 次量測的較高者（連續 2 次較低才降級）；連續 2 次綠層則回到例行量測。複測日前、未升高的量測只記錄。</li>
+      <li>複測日已過未回站者，列入「待回站複測」，請通知民眾回站。</li>
+      <li>結案原因限於：已轉由醫師持續管理（需登記回診日期）、死亡、遷出、失聯、拒絕。</li></ul></div>
     <div class="card" style="margin-top:12px"><h2>系統解讀（請臨床委員會確認）</h2><ol class="small">${E.ASSUMPTIONS.map((a) => `<li>${esc(a)}</li>`).join('')}</ol></div>
     <div class="card" style="margin-top:12px"><h2>健康888 定義</h2>
       <div class="form-grid">
@@ -710,7 +724,7 @@
       $('#close-btn').onclick = () => {
         const reason = $('#close-reason').value;
         if (!confirm(`確定以「${reason}」結案？`)) return;
-        try { E.act(db, ep.id, 'close', { reason, note: $('#close-note').value }, nowISO(), ui.user, sla()); save(); render(); toast('已結案'); } catch (err) { toast(err.message); }
+        try { E.act(db, ep.id, 'close', { reason, note: $('#close-note').value, followupDate: $('#close-followup').value }, nowISO(), ui.user, sla()); save(); render(); toast('已結案'); } catch (err) { toast(err.message); }
       };
     },
     quality() {
@@ -721,7 +735,7 @@
         const rows = [['據點', '期間(天)', '指標', '分子', '分母', '比率', 'CI下限', 'CI上限']];
         for (const s of sites) {
           const q = E.quality(db, now, w, (e) => { const p = IX.byPerson.get(e.personId); return p && inSite(p) && (s === '全部' || p.site === s); });
-          for (const [k, t] of [['redSameDay', '紅層當日處理率'], ['orangeConfirm', '橙層就醫確認率'], ['retest', '複測完成率'], ['improve', '降級(達標)率']]) rows.push([s, w || '全部', t, q[k].k, q[k].n, q[k].p === null ? '' : q[k].p.toFixed(4), q[k].lo === null ? '' : q[k].lo.toFixed(4), q[k].hi === null ? '' : q[k].hi.toFixed(4)]);
+          for (const [k, t] of [['redSameDay', '紅層當日處理率'], ['orangeConfirm', '橙層就醫確認率'], ['retest', '複測完成率'], ['improve', '降級(改善)率']]) rows.push([s, w || '全部', t, q[k].k, q[k].n, q[k].p === null ? '' : q[k].p.toFixed(4), q[k].lo === null ? '' : q[k].lo.toFixed(4), q[k].hi === null ? '' : q[k].hi.toFixed(4)]);
           rows.push([s, w || '全部', '未閉環逾期案數', q.unclosed, q.openCount, '', '', '']);
         }
         download('品質指標.csv', csv(rows), 'text/csv');
@@ -737,7 +751,7 @@
       $('#bk-exp').onclick = () => download(`健康站追蹤備份_${fmtD(nowISO()).replace(/\//g, '')}.json`, JSON.stringify(db), 'application/json');
       $('#bk-imp').onchange = (e) => { const f = e.target.files[0]; if (!f) return; f.text().then((t) => { const d = JSON.parse(t); if (!d.persons || !d.episodes) throw new Error('不是有效的備份檔'); if (!confirm('以備份覆蓋目前資料？')) return; db = d; save(); render(); toast('已還原備份'); }).catch((err) => toast(err.message)); };
       $('#demo-load').onclick = () => { if (!confirm('以示範資料覆蓋目前所有資料？')) return; db = window.Demo.generate(new Date()); save(); render(); };
-      $('#wipe').onclick = () => { if (!confirm('清除全部資料（無法復原）？建議先匯出備份。')) return; db = { persons: [], measurements: [], episodes: [], settings: db.settings, rulesVersion: E.RULES_VERSION }; save(); render(); };
+      $('#wipe').onclick = () => { if (!confirm('清除全部資料（無法復原）？建議先匯出備份。')) return; db = { persons: [], measurements: [], episodes: [], settings: db.settings, rulesVersion: E.RULES_VERSION, schema: E.SCHEMA }; save(); render(); };
     },
     888() {
       $$('[data-gap]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); ui.gap888 = a.dataset.gap; render(); }));
@@ -784,8 +798,10 @@
 
   db = load();
   // 示範資料是以舊規則產生的：直接依新規則重新產生（保留設定）
-  if (db && db.demo && db.rulesVersion !== E.RULES_VERSION) { const keep = db.settings; db = window.Demo.generate(new Date()); if (keep) db.settings = Object.assign(db.settings, keep); save(); setTimeout(() => toast('分層規則已更新，示範資料已依新規則重新產生'), 300); }
+  if (db && db.demo && (db.rulesVersion !== E.RULES_VERSION || db.schema !== E.SCHEMA)) { const keep = db.settings; db = window.Demo.generate(new Date()); if (keep) db.settings = Object.assign(db.settings, keep); save(); setTimeout(() => toast('分層規則已更新，示範資料已依新規則重新產生'), 300); }
   if (!db) { db = window.Demo.generate(new Date()); save(); }
+  // 正式資料：舊版七步驟流程轉成四步驟（每案寫入處理紀錄）
+  if (!db.demo && db.schema !== E.SCHEMA) { const n = E.migrateWorkflow(db); save(); if (n) setTimeout(() => toast(`流程已改為四步驟，${n} 筆追蹤案已轉換`), 300); }
   db.settings = db.settings || {};
   // 舊版預設的「個管師」名單換成 8 名社區護理師；使用者自訂的名單不動
   if (!db.settings.nurses || !db.settings.nurses.length || db.settings.nurses.every((n) => /^個管師/.test(n))) db.settings.nurses = DEFAULT_NURSES.slice();

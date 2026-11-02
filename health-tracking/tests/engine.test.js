@@ -114,31 +114,76 @@ function db0() { return { persons: [{ id: 'p1', name: '測試', sex: 'M', birth:
 const add = (db, at, v) => { db.measurements.push(Object.assign({ id: 'm' + db.measurements.length, personId: 'p1', at }, v)); return E.ingest(db, 'p1', at); };
 const D = (d, h = 9) => new Date(2026, 0, d, h).toISOString();
 
-t('full orange loop with 2-consecutive downgrade', () => {
+const loop = (db, ep, at, visit) => { E.act(db, ep.id, 'notify', {}, at); E.act(db, ep.id, 'intervene', { rx: 'x' }, at); E.act(db, ep.id, 'confirm', visit ? { visitDate: visit } : {}, at); };
+const DT = (y, m, d) => new Date(y, m - 1, d, 9).toISOString();
+
+t('one round: detect -> notify -> intervene -> confirm', () => {
   const db = db0();
   const { episode: ep } = add(db, D(1), { sbp: 165, dbp: 85 });
-  assert.equal(ep.level, 'orange'); assert.equal(ep.state, 'pending');
-  E.act(db, ep.id, 'notify', { method: '電話' }, D(2), '護理師A');
+  assert.equal(ep.level, 'orange'); assert.equal(ep.state, 'detected');
+  assert.throws(() => E.act(db, ep.id, 'intervene', { rx: 'x' }, D(2)), /通知/);
+  E.act(db, ep.id, 'notify', { method: '電話', assignee: '社區護理師 甲' }, D(2), '社區護理師 甲');
   assert.throws(() => E.act(db, ep.id, 'intervene', {}, D(2)), /健康處方/);
-  E.act(db, ep.id, 'intervene', { rx: E.prescription(db.persons[0], ep) }, D(3), '護理師A');
+  E.act(db, ep.id, 'intervene', { rx: E.prescription(db.persons[0], ep) }, D(3));
   assert.throws(() => E.act(db, ep.id, 'confirm', {}, D(10)), /就醫日期/);
-  E.act(db, ep.id, 'confirm', { visitDate: '2026-01-15', facility: '彰基' }, D(16), '護理師A');
-  add(db, D(20), { sbp: 128, dbp: 78 }); // 第 1 次達綠
-  assert.equal(ep.state, 'retested');
-  assert.equal(ep.suggestion.outcome, 'maintain');
-  add(db, D(28), { sbp: 126, dbp: 76 }); // 第 2 次達綠
-  assert.equal(ep.suggestion.outcome, 'close');
-  E.act(db, ep.id, 'judge', { outcome: 'close', reason: '達標回例行量測' }, D(28), '護理師A');
-  assert.equal(ep.state, 'judged');
+  E.act(db, ep.id, 'confirm', { visitDate: '2026-01-15', facility: '彰基' }, D(16));
+  assert.equal(ep.state, 'confirmed');
+  assert.equal(ep.nextDue.slice(0, 10), new Date(2026, 3, 1, 23, 59).toISOString().slice(0, 10), 'orange re-check 90 days from detection');
+  assert.throws(() => E.act(db, ep.id, 'notify', {}, D(17)), /本輪已完成/);
 });
 
-t('upgrade during open episode resets to pending', () => {
+t('readings before the re-check date do not open a new round', () => {
+  const db = db0();
+  const { episode: ep } = add(db, D(1), { sbp: 165, dbp: 85 });
+  loop(db, ep, D(2), '2026-01-03');
+  add(db, D(10), { sbp: 166, dbp: 85 });
+  add(db, D(20), { sbp: 150, dbp: 85 });
+  assert.equal(db.episodes.length, 1);
+});
+
+t('higher reading after confirmation opens a new round immediately', () => {
   const db = db0();
   const { episode: ep } = add(db, D(1), { sbp: 145, dbp: 70 });
-  assert.equal(ep.level, 'yellow');
+  loop(db, ep, D(2));
+  const { episode: n } = add(db, D(10), { sbp: 182, dbp: 100 });
+  assert.equal(db.episodes.length, 2); assert.equal(n.level, 'red'); assert.equal(n.state, 'detected'); assert.equal(n.cycle, 2);
+  assert.equal(ep.recheck.kind, 'upgrade');
+});
+
+t('after re-check date: still abnormal opens next round; downgrade needs 2 consecutive lower', () => {
+  const db = db0();
+  const { episode: ep } = add(db, DT(2026, 1, 1), { sbp: 165, dbp: 85 });
+  loop(db, ep, DT(2026, 1, 2), '2026-01-03');
+  add(db, DT(2026, 3, 20), { sbp: 120, dbp: 70 });        // 複測日前：綠
+  const { episode: n } = add(db, DT(2026, 4, 5), { sbp: 145, dbp: 80 }); // 複測日後：黃；最近 2 次 = 綠、黃 → 黃
+  assert.equal(db.episodes.length, 2); assert.equal(n.level, 'yellow'); assert.equal(ep.recheck.level, 'yellow');
+  assert.ok(n.log[0].text.includes('降為黃層'));
+});
+
+t('after re-check date: one lower reading keeps the level (no single-reading downgrade)', () => {
+  const db = db0();
+  const { episode: ep } = add(db, DT(2026, 1, 1), { sbp: 165, dbp: 85 });
+  loop(db, ep, DT(2026, 1, 2), '2026-01-03');
+  add(db, DT(2026, 3, 20), { sbp: 168, dbp: 85 });        // 複測日前：仍橙
+  const { episode: n } = add(db, DT(2026, 4, 5), { sbp: 150, dbp: 80 }); // 複測日後：黃；最近 2 次 = 橙、黃 → 橙
+  assert.equal(n.level, 'orange');
+});
+
+t('after re-check date: two green readings return to routine without a new round', () => {
+  const db = db0();
+  const { episode: ep } = add(db, DT(2026, 1, 1), { sbp: 145, dbp: 80 });
+  loop(db, ep, DT(2026, 1, 2));
+  add(db, DT(2026, 6, 25), { sbp: 120, dbp: 70 });
+  add(db, DT(2026, 7, 5), { sbp: 122, dbp: 72 });
+  assert.equal(db.episodes.length, 1); assert.equal(ep.recheck.level, 'green'); assert.equal(ep.nextDue, null);
+});
+
+t('upgrade during an open round goes back to detect', () => {
+  const db = db0();
+  const { episode: ep } = add(db, D(1), { sbp: 145, dbp: 70 });
   E.act(db, ep.id, 'notify', {}, D(2));
   add(db, D(5), { sbp: 182, dbp: 100 });
-  assert.equal(ep.level, 'red'); assert.equal(ep.state, 'pending');
+  assert.equal(ep.level, 'red'); assert.equal(ep.state, 'detected'); assert.equal(ep.notify, undefined);
 });
 
 t('same-session retest normal auto-closes', () => {
@@ -146,42 +191,35 @@ t('same-session retest normal auto-closes', () => {
   const { episode: ep } = add(db, D(1, 9), { temp: 37.4 });
   assert.equal(ep.level, 'yellow');
   add(db, new Date(new Date(D(1, 9)).getTime() + 30 * 60000).toISOString(), { temp: 36.8 });
-  assert.equal(ep.state, 'judged'); assert.equal(ep.judge.reason, '同場次重測正常');
+  assert.equal(ep.state, 'closed'); assert.equal(ep.close.reason, '同場次重測正常');
 });
 
-t('red loop: phone follow-up then judge needs follow-up date for physician', () => {
+t('red: re-check 2 weeks after visit, physician close needs follow-up date', () => {
   const db = db0();
   const { episode: ep } = add(db, D(1), { glucose: 320, glucoseType: '隨機' });
   assert.equal(ep.level, 'red');
   assert.ok(new Date(ep.due.confirm) - new Date(D(1)) < 2 * 86400000);
-  E.act(db, ep.id, 'notify', {}, D(1, 10));
-  E.act(db, ep.id, 'intervene', { rx: 'x' }, D(1, 11));
-  E.act(db, ep.id, 'confirm', { visitDate: '2026-01-01' }, D(1, 15));
-  assert.equal(E.nextStep(ep, D(2)).label, '就醫後 2 週電訪確認');
-  E.act(db, ep.id, 'phone', { note: '已就醫用藥' }, D(14));
-  assert.throws(() => E.act(db, ep.id, 'judge', { outcome: 'close', reason: '已轉由醫師持續管理' }, D(14)), /回診日期/);
-  E.act(db, ep.id, 'judge', { outcome: 'close', reason: '已轉由醫師持續管理', followupDate: '2026-02-01' }, D(14));
+  loop(db, ep, D(1, 11), '2026-01-01');
+  assert.equal(ep.nextDue.slice(0, 10), '2026-01-15');
+  assert.equal(E.nextStep(ep, D(2)).label, '就醫後 2 週電訪並請回站複測');
   const q = E.quality(db, D(20), null);
   assert.equal(q.redSameDay.k, 1); assert.equal(q.redSameDay.n, 1);
+  const db2 = db0(); const { episode: e2 } = add(db2, D(1), { sbp: 185, dbp: 100 });
+  assert.throws(() => E.act(db2, e2.id, 'close', { reason: '已轉由醫師持續管理' }, D(2)), /回診日期/);
+  E.act(db2, e2.id, 'close', { reason: '已轉由醫師持續管理', followupDate: '2026-02-01' }, D(2));
+  assert.equal(e2.state, 'closed');
 });
 
-t('maintain opens next cycle', () => {
-  const db = db0();
-  const { episode: ep } = add(db, D(1), { glucose: 110, glucoseType: '空腹' });
-  E.act(db, ep.id, 'notify', {}, D(2)); E.act(db, ep.id, 'intervene', { rx: 'x' }, D(3)); E.act(db, ep.id, 'confirm', {}, D(4));
-  add(db, D(25), { glucose: 112, glucoseType: '空腹' });
-  E.act(db, ep.id, 'judge', { outcome: 'maintain', toLevel: 'yellow' }, D(25));
-  const next = db.episodes.find((e) => e.parentId === ep.id);
-  assert.equal(next.cycle, 2); assert.equal(next.state, 'pending');
-});
-
-t('overdue: notified but no intervention', () => {
+t('overdue step and re-check reminders count as unclosed', () => {
   const db = db0();
   const { episode: ep } = add(db, D(1), { sbp: 165, dbp: 85 });
   E.act(db, ep.id, 'notify', {}, D(2));
   assert.ok(E.nextStep(ep, D(30)).overdue);
-  const q = E.quality(db, D(30), null);
-  assert.equal(q.unclosed, 1);
+  assert.equal(E.quality(db, D(30), null).unclosed, 1);
+  const db2 = db0(); const { episode: e2 } = add(db2, DT(2026, 1, 1), { sbp: 145, dbp: 80 }); loop(db2, e2, DT(2026, 1, 2));
+  assert.equal(E.recheckOverdue(db2, DT(2026, 8, 1)).length, 1);
+  const q = E.quality(db2, DT(2026, 8, 1), null);
+  assert.equal(q.unclosed, 1); assert.equal(q.retest.n, 1); assert.equal(q.retest.k, 0);
 });
 
 // ── 健康 888（只看三高）
@@ -264,7 +302,7 @@ t('regradeOpen applies new rules to open episodes and logs it', () => {
   E.regradeOpen(db3, D(2)); assert.equal(e3.level, 'yellow'); assert.deepEqual(e3.items.map((i) => i.key), ['glucose', 'mets'], 'BP no longer abnormal; fasting 110 counts for glucose and one MetS criterion');
   const db4 = db0(); const { episode: e4 } = add(db4, D(1), { sbp: 125, dbp: 70 }); assert.equal(e4, undefined);
   const db5 = db0(); const { episode: e5 } = add(db5, D(1), { sbp: 145, dbp: 70 }); db5.measurements[0].sbp = 120; // 數值改變後已不異常
-  E.regradeOpen(db5, D(2)); assert.equal(e5.state, 'judged'); assert.equal(e5.judge.reason, E.REGRADE_CLOSE);
+  E.regradeOpen(db5, D(2)); assert.equal(e5.state, 'closed'); assert.equal(e5.close.reason, E.REGRADE_CLOSE);
   assert.equal(db.rulesVersion, E.RULES_VERSION);
 });
 t('regradeOpen keeps the highest level since the case opened (no silent downgrade)', () => {
@@ -273,7 +311,7 @@ t('regradeOpen keeps the highest level since the case opened (no silent downgrad
   add(db, D(5), { sbp: 120, dbp: 70 });                         // 之後一次正常
   E.regradeOpen(db, D(6));
   assert.equal(ep.level, 'orange', 'one normal reading must not downgrade via regrade');
-  assert.equal(ep.state, 'pending');
+  assert.equal(ep.state, 'detected');
 });
 
 // ── 統計

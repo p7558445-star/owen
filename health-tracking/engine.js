@@ -396,10 +396,16 @@
   }
 
   // ───────────────────────── 閉環流程 ─────────────────────────
-  // 偵測 → 待派案 → 已通知 → 已介入 → 已確認（就醫或完成處方）→ 已複測 → 判定
-  const STATES = ['detected', 'pending', 'notified', 'intervened', 'confirmed', 'retested', 'judged'];
-  const STATE_LABEL = { detected: '偵測', pending: '待派案', notified: '已通知', intervened: '已介入', confirmed: '已確認', retested: '已複測', judged: '判定' };
-  const OUTCOME_LABEL = { downgrade: '降級', maintain: '維持', upgrade: '升級', close: '結案' };
+  // 每一輪四步驟：偵測 → 通知 → 介入（健康處方）→ 確認（就醫或完成處方），之後回到偵測反覆。
+  // 下一輪由量測自動開啟：
+  //   1. 量測高於本輪層級 → 立即開新一輪（升級）
+  //   2. 到了複測日（黃 6 個月、橙 3 個月、紅：就醫後 2 週）之後回站量測，仍異常 → 開新一輪；
+  //      新一輪層級取「最近 2 次量測」的較高者（連續 2 次較低才降級）
+  //   複測日前、未升高的量測只記錄，不開新輪。
+  const OPEN_STATES = ['detected', 'notified', 'intervened'];
+  const STATES = ['detected', 'notified', 'intervened', 'confirmed'];
+  const STATE_LABEL = { detected: '偵測', notified: '通知', intervened: '介入', confirmed: '確認', closed: '結案' };
+  const isOpen = (e) => OPEN_STATES.includes(e.state);
 
   function personCtx(person, at) {
     return Object.assign({}, person, { age: ageAt(person.birth, at) });
@@ -410,12 +416,10 @@
     const atLevel = items.filter((i) => i.level === lv);
     const minT = (k, dflt) => atLevel.reduce((m, i) => (i.timing && i.timing[k] !== undefined ? Math.min(m, i.timing[k]) : m), dflt ?? Infinity);
     const confirmDays = minT('confirmDays', sla.confirm[lv]);
-    const retestDays = minT('retestDays', sla.retest[lv] ?? Infinity);
     return {
       notify: dueBy(from, sla.notify[lv]),
       intervene: dueBy(from, Math.min(sla.intervene[lv], confirmDays)),
       confirm: dueBy(from, confirmDays),
-      retest: retestDays === Infinity ? null : dueBy(from, retestDays),
     };
   }
 
@@ -428,56 +432,62 @@
     return Object.values(ev.items).filter((r) => RANK[r.level] >= 1).map((r) => ({ key: r.key, level: r.level, value: r.value, reason: r.reason, provisional: r.provisional, timing: r.lifestyle ? {} : r.timing, lifestyle: !!r.lifestyle, data: r.data }));
   }
 
-  function newEpisode(db, person, session, ev, at, parent, sla) {
+  function newEpisode(db, person, session, ev, at, sla, level, why, basis) {
+    const prev = db.episodes.filter((e) => e.personId === person.id);
+    const lv = level || ev.overall;
     const ep = {
-      id: uid('ep'), personId: person.id, cycle: parent ? parent.cycle + 1 : 1, parentId: parent ? parent.id : null,
-      level: ev.overall, initialLevel: ev.overall, items: summarizeItems(ev), emergency: ev.emergency, provisional: ev.provisional,
-      state: 'pending', detectedAt: session.at, levelAt: at, detectSessionId: session.id, levelSessionId: session.id, createdAt: at,
+      id: uid('ep'), personId: person.id, cycle: prev.length + 1, parentId: prev.length ? prev[prev.length - 1].id : null,
+      level: lv, initialLevel: lv, items: summarizeItems(ev), emergency: ev.emergency, provisional: ev.provisional,
+      state: 'detected', detectedAt: session.at, levelAt: at, detectSessionId: session.id, levelSessionId: session.id, basisSessionIds: basis || [session.id], createdAt: at,
       sessions: [session.id], log: [],
     };
     ep.due = computeDue(ep, sla, ep.items);
-    log(ep, session.at, 'detected', `偵測：${LEVEL_LABEL[ep.level]}層（${ep.items.filter((i) => i.level === ep.level).map((i) => ITEM_LABEL[i.key]).join('、')}）`);
-    log(ep, at, 'pending', '進入待派案');
+    log(ep, session.at, 'detected', `偵測：${LEVEL_LABEL[lv]}層（${ep.items.filter((i) => i.level === ev.overall && !i.lifestyle).map((i) => ITEM_LABEL[i.key]).join('、')}）${why ? '｜' + why : ''}`);
     db.episodes.push(ep);
     return ep;
   }
 
   function openEpisode(db, personId) {
-    return db.episodes.find((e) => e.personId === personId && e.state !== 'judged');
+    return db.episodes.find((e) => e.personId === personId && isOpen(e));
+  }
+  function lastEpisode(db, personId) {
+    const es = db.episodes.filter((e) => e.personId === personId);
+    return es[es.length - 1];
   }
 
   function sessionsOf(db, personId, sla) {
     return groupSessions(db.measurements.filter((m) => m.personId === personId), sla.sessionMinutes);
   }
 
+  // 複測日：黃、橙依時限；紅為就醫日後 2 週（電訪確認）
+  function nextDueOf(ep, sla, visitDate, at) {
+    if (ep.level === 'red') return dueBy(visitDate || at, sla.phoneAfterVisit);
+    return dueBy(ep.levelAt || ep.detectedAt, sla.retest[ep.level]);
+  }
+
   /**
-   * 新量測進來後重新評估該個案（設備 / App 回傳或手動輸入時呼叫）。
-   * 回傳本次場次的判定結果。
-   */
-  /**
-   * 規則更新後，依目前規則重新判定所有開放中的追蹤案。
-   * 只重新評估「決定本案層級的那次量測」（開案或升級時的場次），不用最近一次量測，以免繞過「連續 2 次才降級」。
-   * 由護理師判定產生的週期（維持／降級／升級後的第 2 週期起）層級是人為判定，不自動更動。
+   * 規則更新後，依目前規則重新判定所有進行中的追蹤輪次。
+   * 只重新評估「決定本輪層級的那次量測」（開案或升級時的場次），不用最近一次量測，以免繞過「連續 2 次才降級」。
    * 層級改變寫入處理紀錄；重新判定為綠層者以系統原因結案。
    */
   function regradeOpen(db, now, slaOverride, by) {
     const sla = Object.assign({}, DEFAULT_SLA, slaOverride || {});
     const at = now || new Date().toISOString();
     const changes = [];
-    for (const ep of db.episodes.filter((e) => e.state !== 'judged')) {
+    for (const ep of db.episodes.filter(isOpen)) {
       const person = db.persons.find((p) => p.id === ep.personId);
       if (!person) continue;
-      const sid = ep.levelSessionId || (ep.cycle === 1 ? ep.detectSessionId : null);
-      if (!sid) continue; // 判定產生的週期
-      const s = sessionsOf(db, ep.personId, sla).find((x) => x.id === sid);
-      if (!s) continue;
-      const ev = evaluateSession(personCtx(person, s.at), s.readings);
+      // 決定本輪層級的量測：開案／升級時的場次；複測開輪則為「最近 2 次」
+      const ids = ep.basisSessionIds || [ep.levelSessionId || ep.detectSessionId];
+      const ss = sessionsOf(db, ep.personId, sla).filter((x) => ids.includes(x.id));
+      if (!ss.length) continue;
+      const ev = ss.map((x) => evaluateSession(personCtx(person, x.at), x.readings)).reduce((a, b) => (RANK[b.overall] > RANK[a.overall] ? b : a));
       const prev = ep.level;
       const items = summarizeItems(ev);
       if (RANK[ev.overall] <= 0) {
-        log(ep, at, 'judged', `規則更新（${RULES_VERSION}）：開案量測依新規則未達異常，系統結案（原 ${LEVEL_LABEL[prev]}層）`, by);
-        ep.state = 'judged';
-        ep.judge = { at, outcome: 'close', reason: REGRADE_CLOSE, toLevel: 'green', by: by || '系統' };
+        log(ep, at, 'closed', `規則更新（${RULES_VERSION}）：開案量測依新規則未達異常，系統結案（原 ${LEVEL_LABEL[prev]}層）`, by);
+        ep.state = 'closed';
+        ep.close = { at, reason: REGRADE_CLOSE, by: by || '系統' };
         changes.push({ id: ep.id, personId: ep.personId, from: prev, to: 'green' });
         continue;
       }
@@ -497,6 +507,9 @@
     return changes;
   }
 
+  /**
+   * 新量測進來後重新評估（設備 / App 回傳或手動輸入時呼叫）。回傳本次場次判定與相關的追蹤輪次。
+   */
   function ingest(db, personId, now, slaOverride) {
     const sla = Object.assign({}, DEFAULT_SLA, slaOverride || {});
     const person = db.persons.find((p) => p.id === personId);
@@ -509,147 +522,108 @@
     const at = now || new Date().toISOString();
     let ep = openEpisode(db, personId);
 
-    if (!ep) {
-      if (RANK[ev.overall] >= 1) ep = newEpisode(db, person, session, ev, at, null, sla);
-      return { ev, episode: ep };
-    }
-
-    const sameSession = ep.sessions.includes(session.id) || ep.detectSessionId === session.id;
-    if (!sameSession) ep.sessions.push(session.id);
-
-    // 同一場次內的重測：直接以最新判定取代（重測正常可回綠）
-    if (sameSession && ['pending', 'notified'].includes(ep.state)) {
-      if (ev.overall !== ep.level) {
-        const prev = ep.level;
-        if (RANK[ev.overall] <= 0) {
-          ep.level = ev.overall === 'na' ? prev : 'green';
-          log(ep, at, 'judged', `同場次重測已回綠，系統結案（原 ${LEVEL_LABEL[prev]}層）`);
-          ep.state = 'judged';
-          ep.judge = { at, outcome: 'close', reason: '同場次重測正常', toLevel: 'green', by: '系統' };
-          return { ev, episode: ep };
+    if (ep) {
+      const sameSession = ep.sessions.includes(session.id) || ep.detectSessionId === session.id;
+      if (!sameSession) ep.sessions.push(session.id);
+      // 同一場次內的重測：直接以最新判定取代（重測正常可回綠）
+      if (sameSession && ['detected', 'notified'].includes(ep.state)) {
+        if (ev.overall !== ep.level) {
+          const prev = ep.level;
+          if (RANK[ev.overall] <= 0) {
+            log(ep, at, 'closed', `同場次重測已回綠，系統結案（原 ${LEVEL_LABEL[prev]}層）`);
+            ep.state = 'closed';
+            ep.close = { at, reason: '同場次重測正常', by: '系統' };
+            return { ev, episode: ep };
+          }
+          ep.level = ev.overall; ep.levelAt = at; ep.levelSessionId = session.id; ep.basisSessionIds = [session.id];
+          log(ep, at, RANK[ev.overall] > RANK[prev] ? 'upgraded' : 'regraded', `同場次重測：${LEVEL_LABEL[prev]} → ${LEVEL_LABEL[ev.overall]}`);
         }
-        ep.level = ev.overall; ep.levelAt = at; ep.levelSessionId = session.id;
-        log(ep, at, RANK[ev.overall] > RANK[prev] ? 'upgraded' : 'regraded', `同場次重測：${LEVEL_LABEL[prev]} → ${LEVEL_LABEL[ev.overall]}`);
+        ep.items = summarizeItems(ev); ep.emergency = ev.emergency; ep.provisional = ev.provisional;
+        ep.due = computeDue(ep, sla, ep.items);
+        return { ev, episode: ep };
       }
-      ep.items = summarizeItems(ev); ep.emergency = ev.emergency; ep.provisional = ev.provisional;
-      ep.due = computeDue(ep, sla, ep.items);
+      // 本輪進行中又量到更高層級：本輪升級，回到「偵測」重新通知
+      if (RANK[ev.overall] > RANK[ep.level]) {
+        const prev = ep.level;
+        ep.level = ev.overall; ep.levelAt = at; ep.levelSessionId = session.id; ep.basisSessionIds = [session.id]; ep.items = summarizeItems(ev); ep.emergency = ev.emergency; ep.provisional = ev.provisional;
+        ep.state = 'detected';
+        ep.due = computeDue(ep, sla, ep.items);
+        delete ep.notify; delete ep.intervene;
+        log(ep, at, 'upgraded', `新量測升級：${LEVEL_LABEL[prev]} → ${LEVEL_LABEL[ev.overall]}，回到偵測、重新通知`);
+        return { ev, episode: ep };
+      }
+      log(ep, at, 'measured', `新量測（${LEVEL_LABEL[ev.overall]}層）`);
       return { ev, episode: ep };
     }
 
-    // 新場次
-    if (RANK[ev.overall] > RANK[ep.level] && ['pending', 'notified', 'intervened', 'confirmed'].includes(ep.state)) {
-      const prev = ep.level;
-      ep.level = ev.overall; ep.levelAt = at; ep.levelSessionId = session.id; ep.items = summarizeItems(ev); ep.emergency = ev.emergency; ep.provisional = ev.provisional;
-      ep.state = 'pending';
-      ep.due = computeDue(ep, sla, ep.items);
-      delete ep.notify; delete ep.intervene; delete ep.confirm;
-      log(ep, at, 'upgraded', `新量測升級：${LEVEL_LABEL[prev]} → ${LEVEL_LABEL[ev.overall]}，重新派案`);
+    // 沒有進行中的輪次
+    const last = lastEpisode(db, personId);
+    if (!last || last.state !== 'confirmed') {
+      if (RANK[ev.overall] >= 1) ep = newEpisode(db, person, session, ev, at, sla);
       return { ev, episode: ep };
     }
-    if (['confirmed', 'retested'].includes(ep.state) || (ep.level === 'red' && ep.phone && ep.phone.at)) {
-      ep.state = 'retested';
-      ep.retest = { at: session.at, sessionId: session.id, level: ev.overall };
-      log(ep, at, 'retested', `已複測：${LEVEL_LABEL[ev.overall]}層`);
-      ep.suggestion = suggestJudgement(db, ep, sla);
+    // 上一輪已確認：升高立即開新輪；到複測日後回站則依最近 2 次量測決定
+    if (RANK[ev.overall] > RANK[last.level]) {
+      last.recheck = last.recheck || { at: session.at, level: ev.overall, kind: 'upgrade' };
+      ep = newEpisode(db, person, session, ev, at, sla, ev.overall, `高於上一輪（${LEVEL_LABEL[last.level]}），開新一輪`);
       return { ev, episode: ep };
     }
-    log(ep, at, 'measured', `新量測（${LEVEL_LABEL[ev.overall]}層），流程尚未到複測階段`);
-    return { ev, episode: ep };
-  }
-
-  // 降級規則：達標後連續 2 次維持才降級；升級立即；慢性病不直接結案
-  function suggestJudgement(db, ep, sla) {
-    const person = db.persons.find((p) => p.id === ep.personId);
-    const sessions = sessionsOf(db, ep.personId, sla).filter((s) => new Date(s.at) > new Date(ep.detectedAt) && s.id !== ep.detectSessionId);
-    const levels = sessions.map((s) => evaluateSession(personCtx(person, s.at), s.readings).overall).filter((l) => l !== 'na');
-    if (!levels.length) return null;
-    const lastLv = levels[levels.length - 1];
-    if (RANK[lastLv] > RANK[ep.level]) return { outcome: 'upgrade', toLevel: lastLv, text: `複測 ${LEVEL_LABEL[lastLv]}層，高於目前層級，建議升級` };
-    if (RANK[lastLv] === RANK[ep.level]) return { outcome: 'maintain', toLevel: ep.level, text: '複測層級未變，建議維持並開啟下一追蹤週期' };
-    let run = 0;
-    for (let i = levels.length - 1; i >= 0 && RANK[levels[i]] < RANK[ep.level]; i--) run++;
-    if (run >= 2) {
-      const to = maxLevel(levels.slice(-2));
-      if (to === 'green') return { outcome: 'close', toLevel: 'green', reason: '達標回例行量測', text: '連續 2 次達綠層，建議結案回例行量測（慢性病者請改選「已轉由醫師持續管理」）' };
-      return { outcome: 'downgrade', toLevel: to, text: `連續 2 次低於目前層級，建議降級為 ${LEVEL_LABEL[to]}層` };
+    if (last.nextDue && new Date(session.at) >= startOfDay(last.nextDue)) {
+      const recent = sessions.slice(-2).map((s) => evaluateSession(personCtx(person, s.at), s.readings).overall).filter((l) => l !== 'na');
+      const lv = recent.length ? maxLevel(recent) : ev.overall;
+      if (!last.recheck) last.recheck = { at: session.at, level: lv, kind: 'due' };
+      if (RANK[lv] >= 1) {
+        const why = RANK[lv] < RANK[last.level] ? `複測：連續 2 次低於上一輪，降為${LEVEL_LABEL[lv]}層` : `複測仍為${LEVEL_LABEL[lv]}層，開新一輪`;
+        ep = newEpisode(db, person, session, ev, at, sla, lv, why, sessions.slice(-2).map((x) => x.id));
+      } else {
+        log(last, at, 'rechecked', '複測：最近 2 次皆為綠層，回到例行量測');
+        last.nextDue = null;
+      }
+      return { ev, episode: ep };
     }
-    return { outcome: 'maintain', toLevel: ep.level, text: `複測 ${LEVEL_LABEL[lastLv]}層，但需連續 2 次達標才降級，建議維持並縮短複測` };
+    log(last, at, 'measured', `複測日前量測（${LEVEL_LABEL[ev.overall]}層），未開新輪`);
+    return { ev, episode: last };
   }
 
   /**
-   * 護理師操作。action ∈ assign|notify|intervene|confirm|phone|retestManual|judge
+   * 社區護理師操作。action ∈ notify|intervene|confirm|close
    */
   function act(db, epId, action, payload, now, by, slaOverride) {
     const sla = Object.assign({}, DEFAULT_SLA, slaOverride || {});
     const ep = db.episodes.find((e) => e.id === epId);
     if (!ep) throw new Error('找不到追蹤案');
-    if (ep.state === 'judged') throw new Error('此追蹤案已判定，請於下一週期操作');
+    if (!isOpen(ep)) throw new Error('本輪已完成，下一輪會在複測或升級時自動開始');
     const at = now || new Date().toISOString();
     const p = payload || {};
     switch (action) {
-      case 'assign':
-        ep.assignee = p.assignee; log(ep, at, 'assign', `派案給 ${p.assignee}`, by); break;
       case 'notify':
-        if (ep.state !== 'pending') throw new Error('僅待派案可執行通知');
+        if (ep.state !== 'detected') throw new Error('目前不是「偵測」步驟');
         if (p.assignee) ep.assignee = p.assignee;
         ep.notify = { at, method: p.method || '電話', by };
         ep.state = 'notified';
-        log(ep, at, 'notified', `已通知民眾（${ep.notify.method}）${p.note ? '：' + p.note : ''}`, by); break;
+        log(ep, at, 'notified', `通知民眾（${ep.notify.method}）${ep.assignee ? '｜負責：' + ep.assignee : ''}${p.note ? '：' + p.note : ''}`, by); break;
       case 'intervene':
         if (ep.state !== 'notified') throw new Error('需先完成通知');
         if (!p.rx) throw new Error('只要有異常就要完成健康處方');
         ep.intervene = { at, by, note: p.note || '' };
         ep.rx = { at, text: p.rx, by };
         ep.state = 'intervened';
-        log(ep, at, 'intervened', `已介入並開立健康處方${p.note ? '：' + p.note : ''}`, by); break;
+        log(ep, at, 'intervened', `介入：開立健康處方${p.note ? '：' + p.note : ''}`, by); break;
       case 'confirm': {
         if (ep.state !== 'intervened') throw new Error('需先完成介入');
         const needVisit = RANK[ep.level] >= 2;
         if (needVisit && !p.visitDate) throw new Error('橙／紅層需登記就醫日期');
         ep.confirm = { at, by, type: needVisit ? 'visit' : 'rx', visitDate: p.visitDate || null, facility: p.facility || '', result: p.result || '' };
         ep.state = 'confirmed';
-        if (ep.level === 'red') ep.phone = { due: dueBy(p.visitDate || at, sla.phoneAfterVisit) };
-        if (ep.level !== 'red') ep.due.retest = ep.due.retest || dueBy(ep.levelAt || ep.detectedAt, sla.retest[ep.level]);
-        log(ep, at, 'confirmed', needVisit ? `已確認就醫：${p.visitDate} ${p.facility || ''} ${p.result || ''}`.trim() : '已確認完成健康處方／衛教', by); break;
+        ep.nextDue = nextDueOf(ep, sla, p.visitDate, at);
+        log(ep, at, 'confirmed', (needVisit ? `確認就醫：${p.visitDate} ${p.facility || ''} ${p.result || ''}`.trim() : '確認完成健康處方／衛教') + `｜下次複測：${ep.nextDue.slice(0, 10)}`, by); break;
       }
-      case 'phone':
-        if (ep.level !== 'red' || ep.state !== 'confirmed') throw new Error('電訪確認適用於已確認就醫的紅層');
-        ep.phone = Object.assign(ep.phone || {}, { at, note: p.note || '', by });
-        ep.state = 'retested';
-        ep.retest = { at, level: null, byPhone: true };
-        log(ep, at, 'phone', `就醫後電訪確認：${p.note || '完成'}`, by); break;
-      case 'judge': {
-        if (ep.state !== 'retested') throw new Error('需完成複測（紅層為電訪）才能判定');
-        const outcome = p.outcome;
-        if (!OUTCOME_LABEL[outcome]) throw new Error('判定結果不正確');
-        if (outcome === 'close') {
-          if (!CLOSE_REASONS.includes(p.reason)) throw new Error('結案原因限：' + CLOSE_REASONS.join('、'));
-          if (p.reason === '已轉由醫師持續管理' && !p.followupDate) throw new Error('轉由醫師持續管理需登記回診日期');
-        }
-        ep.judge = { at, outcome, toLevel: p.toLevel || ep.level, reason: p.reason || '', followupDate: p.followupDate || null, by };
-        ep.state = 'judged';
-        log(ep, at, 'judged', `判定：${OUTCOME_LABEL[outcome]}${p.reason ? '（' + p.reason + '）' : ''}${outcome !== 'close' ? ' → ' + LEVEL_LABEL[ep.judge.toLevel] + '層' : ''}`, by);
-        if (outcome !== 'close') {
-          const to = ep.judge.toLevel;
-          if (to === 'green') break; // 降到綠：回例行量測，不再開案
-          const person = db.persons.find((x) => x.id === ep.personId);
-          const items = ep.items.map((i) => Object.assign({}, i, { level: RANK[i.level] > RANK[to] ? to : i.level }));
-          const next = {
-            id: uid('ep'), personId: person.id, cycle: ep.cycle + 1, parentId: ep.id, level: to, initialLevel: to, items,
-            state: 'pending', detectedAt: at, levelAt: at, detectSessionId: ep.retest && ep.retest.sessionId, createdAt: at, sessions: [], log: [],
-          };
-          next.due = computeDue(next, sla, items);
-          log(next, at, 'pending', `第 ${next.cycle} 週期（${OUTCOME_LABEL[outcome]}自上一週期）`, by);
-          db.episodes.push(next);
-          ep.judge.nextId = next.id;
-        }
-        break;
-      }
-      case 'close': // 任何階段的非臨床結案：死亡、遷出、失聯、拒絕
-        if (!['死亡', '遷出', '失聯', '拒絕'].includes(p.reason)) throw new Error('提前結案原因限：死亡、遷出、失聯、拒絕');
-        ep.judge = { at, outcome: 'close', toLevel: ep.level, reason: p.reason, by };
-        ep.state = 'judged';
-        log(ep, at, 'judged', `結案（${p.reason}）${p.note ? '：' + p.note : ''}`, by); break;
+      case 'close': // 非臨床結案：死亡、遷出、失聯、拒絕；或已轉由醫師持續管理（需回診日期）
+        if (!CLOSE_REASONS.includes(p.reason) || p.reason === '達標回例行量測') throw new Error('結案原因限：已轉由醫師持續管理、死亡、遷出、失聯、拒絕');
+        if (p.reason === '已轉由醫師持續管理' && !p.followupDate) throw new Error('轉由醫師持續管理需登記回診日期');
+        ep.close = { at, reason: p.reason, followupDate: p.followupDate || null, by };
+        ep.state = 'closed';
+        log(ep, at, 'closed', `結案（${p.reason}）${p.note ? '：' + p.note : ''}`, by); break;
       default:
         throw new Error('未知操作 ' + action);
     }
@@ -661,15 +635,50 @@
     const t = new Date(now || Date.now());
     const mk = (label, due) => ({ label, due, overdue: !!due && new Date(due) < t, daysLeft: due ? Math.round((startOfDay(due) - startOfDay(t)) / DAY) : null });
     switch (ep.state) {
-      case 'pending': return mk(ep.level === 'red' ? '當日派案並通知民眾' : '派案並通知民眾', ep.due.notify);
-      case 'notified': return mk('介入並開立健康處方', ep.due.intervene);
-      case 'intervened': return mk(RANK[ep.level] >= 2 ? (ep.level === 'red' ? '24 小時內確認就醫' : '確認 4 週內就醫') : '確認完成健康處方／衛教', ep.due.confirm);
-      case 'confirmed':
-        if (ep.level === 'red') return mk('就醫後 2 週電訪確認', ep.phone && ep.phone.due);
-        return mk('到期複測', ep.due.retest);
-      case 'retested': return mk('判定：降級／維持／升級／結案', null);
+      case 'detected': return mk(ep.level === 'red' ? '當日通知民眾' : '通知民眾', ep.due.notify);
+      case 'notified': return mk('介入：開立健康處方', ep.due.intervene);
+      case 'intervened': return mk(RANK[ep.level] >= 2 ? (ep.level === 'red' ? '確認 24 小時內就醫' : '確認 4 週內就醫') : '確認完成健康處方', ep.due.confirm);
+      case 'confirmed': return mk(ep.level === 'red' ? '就醫後 2 週電訪並請回站複測' : '請民眾回站複測', ep.nextDue);
       default: return mk('—', null);
     }
+  }
+
+  // 資料結構版本：2 = 四步驟循環（偵測、通知、介入、確認）
+  const SCHEMA = 2;
+  // 舊版七步驟資料轉成四步驟：待派案→偵測；已複測→確認；判定→確認（附複測結果）或結案
+  function migrateWorkflow(db) {
+    if (db.schema === SCHEMA) return 0;
+    let n = 0;
+    for (const e of db.episodes) {
+      const was = e.state;
+      if (was === 'pending' || was === 'detected') e.state = 'detected';
+      else if (was === 'confirmed' || was === 'retested') {
+        e.state = 'confirmed';
+        e.nextDue = e.nextDue || (e.phone && e.phone.due) || (e.due && e.due.retest) || null;
+        if (e.retest && e.retest.level) e.recheck = { at: e.retest.at, level: e.retest.level, kind: 'due' };
+      } else if (was === 'judged') {
+        const j = e.judge || {};
+        if (j.outcome === 'close' && j.reason !== '達標回例行量測') { e.state = 'closed'; e.close = { at: j.at, reason: j.reason, followupDate: j.followupDate || null, by: j.by }; }
+        else { e.state = 'confirmed'; e.nextDue = null; e.recheck = { at: j.at, level: j.toLevel || 'green', kind: 'due' }; }
+      }
+      if (e.due) delete e.due.retest;
+      if (was !== e.state) { e.log.push({ at: new Date().toISOString(), type: 'migrated', text: `流程改為四步驟：「${was}」轉為「${STATE_LABEL[e.state]}」`, by: '系統' }); n++; }
+    }
+    db.schema = SCHEMA;
+    return n;
+  }
+
+  // 上一輪已確認、複測日已過但尚未回站的民眾（「待回站複測」提醒）
+  function recheckOverdue(db, now) {
+    const t = new Date(now || Date.now());
+    const out = [];
+    const lastBy = new Map();
+    for (const e of db.episodes) lastBy.set(e.personId, e);
+    for (const e of lastBy.values()) {
+      if (e.state !== 'confirmed' || !e.nextDue || e.recheck) continue;
+      if (new Date(e.nextDue) < t) out.push(e);
+    }
+    return out;
   }
 
   // ───────────────────────── 統計 ─────────────────────────
@@ -684,43 +693,48 @@
   function firstLog(ep, type) { return ep.log.find((l) => l.type === type); }
 
   /**
-   * 品質指標：紅層當日處理率、橙層就醫確認率、複測完成率、降級（達標）率、未閉環個案數與原因
-   * windowDays：以偵測日落在期間內的追蹤週期為母群
+   * 品質指標：紅層當日處理率、橙層就醫確認率、複測完成率、降級（改善）率、未閉環個案數與原因
+   * windowDays：以偵測日落在期間內的追蹤輪次為母群
    */
   function quality(db, now, windowDays, filter) {
     const t = new Date(now || Date.now());
     const since = windowDays ? addDays(t, -windowDays) : new Date(0);
     const eps = db.episodes.filter((e) => new Date(e.detectedAt) >= since && (!filter || filter(e)));
+    const gone = (e) => e.close && ['死亡', '遷出'].includes(e.close.reason);
 
     const red = eps.filter((e) => e.initialLevel === 'red');
     const redSameDay = red.filter((e) => { const iv = firstLog(e, 'intervened'); return iv && sameDay(iv.at, e.detectedAt); });
 
-    const orangeDue = eps.filter((e) => e.initialLevel === 'orange' && (e.confirm || (e.due.confirm && new Date(e.due.confirm) < t)) && !(e.judge && ['死亡', '遷出'].includes(e.judge.reason)));
+    const orangeDue = eps.filter((e) => e.initialLevel === 'orange' && (e.confirm || (e.due.confirm && new Date(e.due.confirm) < t)) && !gone(e));
     const orangeOk = orangeDue.filter((e) => e.confirm && e.confirm.type === 'visit' && new Date(e.confirm.at) <= new Date(e.due.confirm));
 
-    const retestDue = eps.filter((e) => e.level !== 'red' && e.due.retest && new Date(e.due.retest) < t && !(e.judge && ['死亡', '遷出'].includes(e.judge.reason)));
-    const retestDone = retestDue.filter((e) => e.retest);
+    // 複測完成：已確認、複測日已過的輪次中，之後有回站量測（含複測日前提早升級者）
+    const retestDue = eps.filter((e) => e.state === 'confirmed' && e.nextDue && new Date(e.nextDue) < t);
+    const retestDone = retestDue.filter((e) => e.recheck);
 
-    const judged = eps.filter((e) => e.state === 'judged' && e.judge && !['死亡', '遷出', '失聯', '拒絕'].includes(e.judge.reason) && !['同場次重測正常', REGRADE_CLOSE].includes(e.judge.reason));
-    const improved = judged.filter((e) => e.judge.outcome === 'downgrade' || (e.judge.outcome === 'close' && e.judge.reason === '達標回例行量測'));
+    // 降級（改善）：已有複測結果的輪次中，複測層級低於本輪
+    const rechecked = eps.filter((e) => e.state === 'confirmed' && e.recheck);
+    const improved = rechecked.filter((e) => RANK[e.recheck.level] < RANK[e.level]);
 
-    const open = db.episodes.filter((e) => e.state !== 'judged' && (!filter || filter(e)));
+    const open = db.episodes.filter((e) => isOpen(e) && (!filter || filter(e)));
     const stuck = open.map((e) => ({ e, s: nextStep(e, t) })).filter((x) => x.s.overdue);
     const byReason = {};
     for (const x of stuck) {
       const k = `停在「${STATE_LABEL[x.e.state]}」：${x.s.label}逾期`;
       byReason[k] = (byReason[k] || 0) + 1;
     }
+    const waiting = recheckOverdue(db, t).filter((e) => !filter || filter(e));
+    if (waiting.length) byReason['已確認、複測日已過未回站'] = waiting.length;
     const closeReasons = {};
-    for (const e of eps.filter((e) => e.state === 'judged' && e.judge.outcome === 'close')) closeReasons[e.judge.reason] = (closeReasons[e.judge.reason] || 0) + 1;
+    for (const e of eps.filter((e) => e.state === 'closed')) closeReasons[e.close.reason] = (closeReasons[e.close.reason] || 0) + 1;
 
     return {
       redSameDay: wilson(redSameDay.length, red.length),
       orangeConfirm: wilson(orangeOk.length, orangeDue.length),
       retest: wilson(retestDone.length, retestDue.length),
-      improve: wilson(improved.length, judged.length),
+      improve: wilson(improved.length, rechecked.length),
       openCount: open.length,
-      unclosed: stuck.length,
+      unclosed: stuck.length + waiting.length,
       unclosedReasons: byReason,
       closeReasons,
       episodes: eps.length,
@@ -756,7 +770,7 @@
   }
 
   function prescription(person, ep) {
-    const lines = [`${person.name} 健康處方（${LEVEL_LABEL[ep.level]}層，第 ${ep.cycle} 週期）`, ''];
+    const lines = [`${person.name} 健康處方（${LEVEL_LABEL[ep.level]}層，第 ${ep.cycle} 輪）`, ''];
     const items = ep.items.slice().sort((a, b) => (a.lifestyle - b.lifestyle) || (RANK[b.level] - RANK[a.level]));
     for (const i of items) lines.push(...rxSection(i, person.sex), '');
     const plan = {
@@ -967,9 +981,9 @@
 
   const Engine = {
     LEVELS, RANK, LEVEL_LABEL, LEVEL_MEANING, ITEMS, ITEM_LABEL, SYMPTOMS, SYMPTOM_BY_LABEL, ASSUMPTIONS, DEFAULT_SLA, CLOSE_REASONS,
-    STATES, STATE_LABEL, OUTCOME_LABEL, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, DOWNGRADE_888, KEYS_888, cascade888,
+    STATES, OPEN_STATES, STATE_LABEL, isOpen, recheckOverdue, SCHEMA, migrateWorkflow, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, DOWNGRADE_888, KEYS_888, cascade888,
     LIFESTYLE, lifestylePrescription, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
-    maxLevel, evaluateSession, groupSessions, ingest, act, nextStep, suggestJudgement, quality, wilson, prescription,
+    maxLevel, evaluateSession, groupSessions, ingest, act, nextStep, quality, wilson, prescription,
     parseRoster, parseBirth, validTwId, maskId, maskName, ageAt, addDays, sameDay, normGluType, uid,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = Engine;

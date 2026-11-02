@@ -1,0 +1,7 @@
+# 個資保護：名冊與量測原始檔不可提交（公開 repo）
+*.xlsx
+*.xls
+*.csv
+*.json
+!package.json
+*.zip

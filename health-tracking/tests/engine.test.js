@@ -252,6 +252,30 @@ t('BP prescription follows revised tiers, not the document 130/80 cut-off', () =
   const o = mk(165, 85); assert.ok(o.includes('心臟內科接受進一步評估'), 'orange: referral line');
 });
 
+t('regradeOpen applies new rules to open episodes and logs it', () => {
+  const db = db0();
+  const { episode: ep } = add(db, D(1), { sbp: 165, dbp: 80 });
+  ep.level = 'red'; ep.initialLevel = 'red'; // 模擬舊規則留下的層級
+  const db2 = db0(); const { episode: e2 } = add(db2, D(1), { sbp: 143, dbp: 70 }); e2.level = 'orange';
+  const db3 = db0(); const { episode: e3 } = add(db3, D(1), { sbp: 135, dbp: 70, glucose: 110, glucoseType: '空腹' }); e3.items = [{ key: 'bp', level: 'orange' }]; e3.level = 'orange';
+  let ch = E.regradeOpen(db, D(2));
+  assert.equal(ep.level, 'orange'); assert.ok(ep.log.some((l) => l.text.includes('規則更新'))); assert.equal(ch.length, 1);
+  E.regradeOpen(db2, D(2)); assert.equal(e2.level, 'yellow', '143/70 is yellow under revised tiers');
+  E.regradeOpen(db3, D(2)); assert.equal(e3.level, 'yellow'); assert.deepEqual(e3.items.map((i) => i.key), ['glucose', 'mets'], 'BP no longer abnormal; fasting 110 counts for glucose and one MetS criterion');
+  const db4 = db0(); const { episode: e4 } = add(db4, D(1), { sbp: 125, dbp: 70 }); assert.equal(e4, undefined);
+  const db5 = db0(); const { episode: e5 } = add(db5, D(1), { sbp: 145, dbp: 70 }); db5.measurements[0].sbp = 120; // 數值改變後已不異常
+  E.regradeOpen(db5, D(2)); assert.equal(e5.state, 'judged'); assert.equal(e5.judge.reason, E.REGRADE_CLOSE);
+  assert.equal(db.rulesVersion, E.RULES_VERSION);
+});
+t('regradeOpen keeps the highest level since the case opened (no silent downgrade)', () => {
+  const db = db0();
+  const { episode: ep } = add(db, D(1), { sbp: 165, dbp: 80 }); // 橙
+  add(db, D(5), { sbp: 120, dbp: 70 });                         // 之後一次正常
+  E.regradeOpen(db, D(6));
+  assert.equal(ep.level, 'orange', 'one normal reading must not downgrade via regrade');
+  assert.equal(ep.state, 'pending');
+});
+
 // ── 統計
 t('wilson', () => { const w = E.wilson(8, 10); assert.ok(Math.abs(w.lo - 0.4902) < 0.001 && Math.abs(w.hi - 0.9433) < 0.001); });
 

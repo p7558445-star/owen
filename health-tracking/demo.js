@@ -108,6 +108,7 @@
     }
     void all;
     db.settings = { nurses: NURSES.slice() };
+    db.rulesVersion = E.RULES_VERSION;
     return db;
   }
 

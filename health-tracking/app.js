@@ -160,9 +160,18 @@
     index(); shell();
     const [route, arg] = (location.hash.slice(2) || 'dashboard').split('/');
     const app = $('#app');
-    const banner = db.demo ? `<div class="banner no-print">目前顯示的是<strong>虛構示範資料</strong>（${db.persons.length} 位合成民眾），用來展示分層與閉環流程。正式使用請到「資料匯入」清除示範資料並匯入名冊。</div>` : '';
+    const stale = !db.demo && db.episodes.some((e) => e.state !== 'judged') && db.rulesVersion !== E.RULES_VERSION
+      ? `<div class="banner no-print row spread"><span>分層規則已更新（${E.RULES_VERSION}）。開放中的追蹤案仍是依開案當時的規則判定，可能與目前畫面上的項目層級不一致。</span><button class="btn sm primary" type="button" id="regrade-btn">依新規則重新判定</button></div>` : '';
+    const banner = stale + (db.demo ? `<div class="banner no-print">目前顯示的是<strong>虛構示範資料</strong>（${db.persons.length} 位合成民眾），用來展示分層與閉環流程。正式使用請到「資料匯入」清除示範資料並匯入名冊。</div>` : '');
     const views = { dashboard, worklist, residents, p: caseView, quality: qualityView, 888: view888, import: importView, rules: rulesView };
     app.innerHTML = banner + (views[route] || dashboard)(arg);
+    const rg = $('#regrade-btn');
+    if (rg) rg.onclick = () => {
+      if (!confirm('依目前規則，以每人最近一次量測重新判定所有開放中的追蹤案？變動會寫入各案的處理紀錄。')) return;
+      const ch = E.regradeOpen(db, nowISO(), sla(), ui.user); save(); render();
+      const up = ch.filter((c) => E.RANK[c.to] > E.RANK[c.from]).length, down = ch.length - up;
+      toast(`已重新判定：${ch.length} 案層級改變（升 ${up}、降或結案 ${down}）`);
+    };
     (bind[route] || (() => {}))(arg);
     saveUI();
   }
@@ -564,7 +573,7 @@
 
   function commitRoster() {
     if (!pendingRoster) return;
-    if (db.demo) { db = { persons: [], measurements: [], episodes: [], settings: db.settings }; }
+    if (db.demo) { db = { persons: [], measurements: [], episodes: [], settings: db.settings, rulesVersion: E.RULES_VERSION }; }
     const byId = new Map(db.persons.filter((p) => p.nationalId).map((p) => [p.nationalId, p]));
     let add = 0, upd = 0;
     for (const r of pendingRoster.all) {
@@ -728,7 +737,7 @@
       $('#bk-exp').onclick = () => download(`健康站追蹤備份_${fmtD(nowISO()).replace(/\//g, '')}.json`, JSON.stringify(db), 'application/json');
       $('#bk-imp').onchange = (e) => { const f = e.target.files[0]; if (!f) return; f.text().then((t) => { const d = JSON.parse(t); if (!d.persons || !d.episodes) throw new Error('不是有效的備份檔'); if (!confirm('以備份覆蓋目前資料？')) return; db = d; save(); render(); toast('已還原備份'); }).catch((err) => toast(err.message)); };
       $('#demo-load').onclick = () => { if (!confirm('以示範資料覆蓋目前所有資料？')) return; db = window.Demo.generate(new Date()); save(); render(); };
-      $('#wipe').onclick = () => { if (!confirm('清除全部資料（無法復原）？建議先匯出備份。')) return; db = { persons: [], measurements: [], episodes: [], settings: db.settings }; save(); render(); };
+      $('#wipe').onclick = () => { if (!confirm('清除全部資料（無法復原）？建議先匯出備份。')) return; db = { persons: [], measurements: [], episodes: [], settings: db.settings, rulesVersion: E.RULES_VERSION }; save(); render(); };
     },
     888() {
       $$('[data-gap]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); ui.gap888 = a.dataset.gap; render(); }));
@@ -774,6 +783,8 @@
   window.addEventListener('hashchange', () => { window.scrollTo(0, 0); render(); });
 
   db = load();
+  // 示範資料是以舊規則產生的：直接依新規則重新產生（保留設定）
+  if (db && db.demo && db.rulesVersion !== E.RULES_VERSION) { const keep = db.settings; db = window.Demo.generate(new Date()); if (keep) db.settings = Object.assign(db.settings, keep); save(); setTimeout(() => toast('分層規則已更新，示範資料已依新規則重新產生'), 300); }
   if (!db) { db = window.Demo.generate(new Date()); save(); }
   db.settings = db.settings || {};
   // 舊版預設的「個管師」名單換成 8 名社區護理師；使用者自訂的名單不動

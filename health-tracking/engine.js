@@ -72,6 +72,10 @@
   ];
 
   // 處理時限（天），可由設定覆寫
+  // 分層規則版本：閾值或計入整體層級的規則有變動時更新，後台據此提示重新判定開放中的追蹤案
+  const RULES_VERSION = '2026-11-02';
+  const REGRADE_CLOSE = '規則更新後重新判定為綠層';
+
   const DEFAULT_SLA = {
     notify: { red: 0, orange: 3, yellow: 14 },
     intervene: { red: 0, orange: 14, yellow: 90 },
@@ -428,7 +432,7 @@
     const ep = {
       id: uid('ep'), personId: person.id, cycle: parent ? parent.cycle + 1 : 1, parentId: parent ? parent.id : null,
       level: ev.overall, initialLevel: ev.overall, items: summarizeItems(ev), emergency: ev.emergency, provisional: ev.provisional,
-      state: 'pending', detectedAt: session.at, levelAt: at, detectSessionId: session.id, createdAt: at,
+      state: 'pending', detectedAt: session.at, levelAt: at, detectSessionId: session.id, levelSessionId: session.id, createdAt: at,
       sessions: [session.id], log: [],
     };
     ep.due = computeDue(ep, sla, ep.items);
@@ -450,6 +454,49 @@
    * 新量測進來後重新評估該個案（設備 / App 回傳或手動輸入時呼叫）。
    * 回傳本次場次的判定結果。
    */
+  /**
+   * 規則更新後，依目前規則重新判定所有開放中的追蹤案。
+   * 只重新評估「決定本案層級的那次量測」（開案或升級時的場次），不用最近一次量測，以免繞過「連續 2 次才降級」。
+   * 由護理師判定產生的週期（維持／降級／升級後的第 2 週期起）層級是人為判定，不自動更動。
+   * 層級改變寫入處理紀錄；重新判定為綠層者以系統原因結案。
+   */
+  function regradeOpen(db, now, slaOverride, by) {
+    const sla = Object.assign({}, DEFAULT_SLA, slaOverride || {});
+    const at = now || new Date().toISOString();
+    const changes = [];
+    for (const ep of db.episodes.filter((e) => e.state !== 'judged')) {
+      const person = db.persons.find((p) => p.id === ep.personId);
+      if (!person) continue;
+      const sid = ep.levelSessionId || (ep.cycle === 1 ? ep.detectSessionId : null);
+      if (!sid) continue; // 判定產生的週期
+      const s = sessionsOf(db, ep.personId, sla).find((x) => x.id === sid);
+      if (!s) continue;
+      const ev = evaluateSession(personCtx(person, s.at), s.readings);
+      const prev = ep.level;
+      const items = summarizeItems(ev);
+      if (RANK[ev.overall] <= 0) {
+        log(ep, at, 'judged', `規則更新（${RULES_VERSION}）：開案量測依新規則未達異常，系統結案（原 ${LEVEL_LABEL[prev]}層）`, by);
+        ep.state = 'judged';
+        ep.judge = { at, outcome: 'close', reason: REGRADE_CLOSE, toLevel: 'green', by: by || '系統' };
+        changes.push({ id: ep.id, personId: ep.personId, from: prev, to: 'green' });
+        continue;
+      }
+      const sameItems = JSON.stringify(items.map((i) => i.key + i.level)) === JSON.stringify(ep.items.map((i) => i.key + i.level));
+      if (ev.overall === prev && sameItems) continue;
+      ep.items = items; ep.emergency = ev.emergency; ep.provisional = ev.provisional;
+      if (ev.overall !== prev) {
+        ep.level = ev.overall; ep.levelAt = at;
+        ep.due = computeDue(ep, sla, ep.items);
+        log(ep, at, RANK[ev.overall] > RANK[prev] ? 'upgraded' : 'regraded', `規則更新（${RULES_VERSION}）：開案（或升級）時的量測依新規則重新判定 ${LEVEL_LABEL[prev]} → ${LEVEL_LABEL[ev.overall]}`, by);
+        changes.push({ id: ep.id, personId: ep.personId, from: prev, to: ev.overall });
+      } else {
+        log(ep, at, 'regraded', `規則更新（${RULES_VERSION}）：異常項目依新規則更新，層級維持${LEVEL_LABEL[prev]}`, by);
+      }
+    }
+    db.rulesVersion = RULES_VERSION;
+    return changes;
+  }
+
   function ingest(db, personId, now, slaOverride) {
     const sla = Object.assign({}, DEFAULT_SLA, slaOverride || {});
     const person = db.persons.find((p) => p.id === personId);
@@ -481,7 +528,7 @@
           ep.judge = { at, outcome: 'close', reason: '同場次重測正常', toLevel: 'green', by: '系統' };
           return { ev, episode: ep };
         }
-        ep.level = ev.overall; ep.levelAt = at;
+        ep.level = ev.overall; ep.levelAt = at; ep.levelSessionId = session.id;
         log(ep, at, RANK[ev.overall] > RANK[prev] ? 'upgraded' : 'regraded', `同場次重測：${LEVEL_LABEL[prev]} → ${LEVEL_LABEL[ev.overall]}`);
       }
       ep.items = summarizeItems(ev); ep.emergency = ev.emergency; ep.provisional = ev.provisional;
@@ -492,7 +539,7 @@
     // 新場次
     if (RANK[ev.overall] > RANK[ep.level] && ['pending', 'notified', 'intervened', 'confirmed'].includes(ep.state)) {
       const prev = ep.level;
-      ep.level = ev.overall; ep.levelAt = at; ep.items = summarizeItems(ev); ep.emergency = ev.emergency; ep.provisional = ev.provisional;
+      ep.level = ev.overall; ep.levelAt = at; ep.levelSessionId = session.id; ep.items = summarizeItems(ev); ep.emergency = ev.emergency; ep.provisional = ev.provisional;
       ep.state = 'pending';
       ep.due = computeDue(ep, sla, ep.items);
       delete ep.notify; delete ep.intervene; delete ep.confirm;
@@ -654,7 +701,7 @@
     const retestDue = eps.filter((e) => e.level !== 'red' && e.due.retest && new Date(e.due.retest) < t && !(e.judge && ['死亡', '遷出'].includes(e.judge.reason)));
     const retestDone = retestDue.filter((e) => e.retest);
 
-    const judged = eps.filter((e) => e.state === 'judged' && e.judge && !['死亡', '遷出', '失聯', '拒絕'].includes(e.judge.reason) && e.judge.reason !== '同場次重測正常');
+    const judged = eps.filter((e) => e.state === 'judged' && e.judge && !['死亡', '遷出', '失聯', '拒絕'].includes(e.judge.reason) && !['同場次重測正常', REGRADE_CLOSE].includes(e.judge.reason));
     const improved = judged.filter((e) => e.judge.outcome === 'downgrade' || (e.judge.outcome === 'close' && e.judge.reason === '達標回例行量測'));
 
     const open = db.episodes.filter((e) => e.state !== 'judged' && (!filter || filter(e)));
@@ -921,7 +968,7 @@
   const Engine = {
     LEVELS, RANK, LEVEL_LABEL, LEVEL_MEANING, ITEMS, ITEM_LABEL, SYMPTOMS, SYMPTOM_BY_LABEL, ASSUMPTIONS, DEFAULT_SLA, CLOSE_REASONS,
     STATES, STATE_LABEL, OUTCOME_LABEL, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, DOWNGRADE_888, KEYS_888, cascade888,
-    LIFESTYLE, lifestylePrescription,
+    LIFESTYLE, lifestylePrescription, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
     maxLevel, evaluateSession, groupSessions, ingest, act, nextStep, suggestJudgement, quality, wilson, prescription,
     parseRoster, parseBirth, validTwId, maskId, maskName, ageAt, addDays, sameDay, normGluType, uid,
   };

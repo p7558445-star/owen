@@ -26,9 +26,29 @@
     try { const s = localStorage.getItem(KEY); if (s) return JSON.parse(s); } catch (e) { /* 忽略 */ }
     return null;
   }
+  // 示範資料以明文存放；正式資料（含姓名、身分證號等個資）一律以 AES-256-GCM 加密後才寫入瀏覽器
+  let vaultKey = null;
+  let saving = Promise.resolve();
+  const sensitive = () => db && !db.demo && db.persons.length > 0;
   function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(db)); return true; }
-    catch (e) { toast('無法儲存到瀏覽器（空間不足或已停用），請先匯出備份'); return false; }
+    if (!db) return false;
+    if (sensitive() && !vaultKey) { toast('含個資的資料必須先設定通行密語才能儲存'); requirePassphrase(); return false; }
+    const snapshot = JSON.stringify(db);
+    const write = async () => {
+      try {
+        const payload = vaultKey && !db.demo ? JSON.stringify(await window.Vault.seal(vaultKey, JSON.parse(snapshot))) : snapshot;
+        localStorage.setItem(KEY, payload);
+      } catch (e) { toast('無法儲存到瀏覽器（空間不足或已停用），請先匯出備份'); }
+    };
+    saving = saving.then(write, write);
+    return true;
+  }
+  // 稽核紀錄：敏感操作留痕（存在加密資料內）。注意：操作者為自選，正式上線需搭配院內帳號登入
+  function audit(action, detail) {
+    if (!db || db.demo) return;
+    db.audit = db.audit || [];
+    db.audit.push({ at: nowISO(), user: ui.user || '', action, detail: detail || '' });
+    if (db.audit.length > 5000) db.audit.splice(0, db.audit.length - 5000);
   }
   const t888 = () => Object.assign({}, E.DEFAULT_888, (db.settings && db.settings.t888) || {});
   const sla = () => Object.assign({}, E.DEFAULT_SLA, (db.settings && db.settings.sla) || {});
@@ -78,7 +98,13 @@
     const blob = new Blob([content], { type }); const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
-  function csv(rows) { return '﻿' + rows.map((r) => r.map((c) => { const s = String(c ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }).join(',')).join('\r\n'); }
+  // CSV：防公式注入（文字以 = + - @ 或定位字元開頭時前置 '，避免在 Excel 被當成公式執行）
+  function csv(rows) { return '\ufeff' + rows.map((r) => r.map((c) => { let s = String(c ?? ''); if (typeof c !== 'number' && /^[=+\-@\t\r]/.test(s)) s = "'" + s; return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }).join(',')).join('\r\n'); }
+  function exportCsv(name, rows, what) {
+    if (sensitive() && !confirm('匯出的檔案含個人資料且未加密。請只存放在院內核可的加密位置，用畢刪除。確定匯出？')) return;
+    audit('匯出', `${what || name}（${Math.max(0, rows.length - 1)} 列）`); save();
+    download(name, csv(rows), 'text/csv');
+  }
 
   // 全域提示框：任何帶 data-tip 的元素
   const tip = document.createElement('div'); tip.className = 'tip'; tip.style.position = 'fixed'; document.body.appendChild(tip);
@@ -152,6 +178,7 @@
     if (ui.site !== 'all' && !sites.includes(ui.site)) ui.site = 'all';
     $('#site-filter').innerHTML = `<option value="all">全部據點</option>` + sites.map((s) => `<option ${s === ui.site ? 'selected' : ''}>${esc(s)}</option>`).join('');
     const ns = nurses(); if (!ns.includes(ui.user)) ui.user = ns[0];
+    $('#lock-btn').hidden = !vaultKey;
     $('#user-sel').innerHTML = ns.map((n) => `<option ${n === ui.user ? 'selected' : ''}>${esc(n)}</option>`).join('');
     const route = (location.hash.slice(2) || 'dashboard').split('/')[0];
     const now = new Date();
@@ -171,7 +198,7 @@
     const rg = $('#regrade-btn');
     if (rg) rg.onclick = () => {
       if (!confirm('依目前規則，以每人最近一次量測重新判定所有開放中的追蹤案？變動會寫入各案的處理紀錄。')) return;
-      const ch = E.regradeOpen(db, nowISO(), sla(), ui.user); save(); render();
+      const ch = E.regradeOpen(db, nowISO(), sla(), ui.user); audit('依新規則重新判定', `${ch.length} 案`); save(); render();
       const up = ch.filter((c) => E.RANK[c.to] > E.RANK[c.from]).length, down = ch.length - up;
       toast(`已重新判定：${ch.length} 案層級改變（升 ${up}、降或結案 ${down}）`);
     };
@@ -444,6 +471,7 @@
       if (fd.get('arr')) m.arr = true;
       if (m.glucose !== undefined) m.glucoseType = fd.get('glucoseType');
       if (Object.keys(m).length <= 5 && !m.arr) throw new Error('請至少輸入一項數值');
+      const bad = E.validateMeasurement(m); if (bad.length) throw new Error(bad.join('；'));
       if ((m.sbp === undefined) !== (m.dbp === undefined)) throw new Error('血壓請同時輸入收縮壓與舒張壓');
       db.measurements.push(m);
       const r = E.ingest(db, p.id, m.at, sla());
@@ -539,12 +567,12 @@
     <div class="grid g2">
       <div class="card"><h2>1. 民眾名冊（優活雲批次建立個案名單）</h2>
         <p class="small">支援目前各據點填寫的 Excel 格式（每個工作表一個據點）。系統會自動校正：民國年、年份重複加 1911、身高以公尺填寫、身分證號填錯欄位，並以身分證號去重。</p>
-        <input type="file" id="roster-file" accept=".xlsx,.xls">
+        <input type="file" id="roster-file" accept=".xlsx">
         <div id="roster-preview"></div>
       </div>
       <div class="card"><h2>2. 量測資料（九合一設備／App 匯出）</h2>
         <p class="small">CSV 或 Excel，每列一次量測，以「識別值」（身分證號或示範編號）對應民眾。同一人 60 分鐘內的多筆視為同一場次重測。匯入後依時間順序逐筆判定並開案。</p>
-        <div class="row"><input type="file" id="meas-file" accept=".csv,.xlsx,.xls"><button class="btn sm" id="tpl" type="button">下載欄位範本</button></div>
+        <div class="row"><input type="file" id="meas-file" accept=".csv,.xlsx"><button class="btn sm" id="tpl" type="button">下載欄位範本</button></div>
         <div id="meas-preview"></div>
         <details class="small" style="margin-top:8px"><summary>欄位說明</summary><p>${M_COLS.map(([c]) => c).join('、')}。<br>血糖類型填「空腹／飯後／隨機」；心律旗標填 Y；症狀以「、」分隔，可用：${Object.values(E.SYMPTOMS).map((s) => s.replace(/（.*）/, '')).join('、')}。<br>正式串接時建議由 App 後端以 API 即時推送同樣欄位，而非人工匯檔。</p></details>
       </div>
@@ -556,15 +584,11 @@
     </div>`;
   }
 
-  function readWorkbook(file) {
-    return file.arrayBuffer().then((buf) => {
-      if (!window.XLSX) throw new Error('Excel 解析元件未載入（需網路連線）');
-      return XLSX.read(buf, { type: 'array', cellDates: true });
-    });
-  }
+  // 不依賴第三方程式庫的 xlsx／csv 讀取器（xlsx-reader.js），離線可用
+  function readWorkbook(file) { return window.XlsxReader.readFile(file); }
 
   function previewRoster(wb) {
-    const sheets = wb.SheetNames.map((n) => ({ name: n, ...E.parseRoster(XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' }), n) }));
+    const sheets = wb.SheetNames.map((n) => ({ name: n, ...E.parseRoster(wb.rows.get(n), n) }));
     const all = sheets.flatMap((s) => s.persons);
     const seen = new Map(), dups = [];
     for (const p of all) { if (!p.nationalId) continue; if (seen.has(p.nationalId)) dups.push(p); else seen.set(p.nationalId, p); }
@@ -581,7 +605,7 @@
       <p class="small muted">缺身分證號者仍會建檔，但無法自動對應設備資料。</p>`;
   }
 
-  function commitRoster() {
+  function commitRoster(newKey) {
     if (!pendingRoster) return;
     if (db.demo) { db = { persons: [], measurements: [], episodes: [], settings: db.settings, rulesVersion: E.RULES_VERSION, schema: E.SCHEMA }; }
     const byId = new Map(db.persons.filter((p) => p.nationalId).map((p) => [p.nationalId, p]));
@@ -592,6 +616,8 @@
       const p = { id: E.uid('p'), name: r.name, sex: r.sex, birth: r.birth, heightCm: r.heightCm, nationalId: r.nationalId, phone: r.phone, site: r.site };
       db.persons.push(p); if (p.nationalId) byId.set(p.nationalId, p); add++;
     }
+    if (newKey) audit('設定通行密語', '匯入名冊前設定，資料開始加密');
+    audit('匯入名冊', `新增 ${add} 位、更新 ${upd} 位`);
     pendingRoster = null; save(); render(); toast(`已新增 ${add} 位、更新 ${upd} 位`);
   }
 
@@ -606,7 +632,7 @@
     const key = new Map();
     for (const p of db.persons) { if (p.nationalId) key.set(p.nationalId, p); if (p.demoId) key.set(p.demoId, p); }
     const exist = new Set(db.measurements.map((m) => m.personId + '|' + m.at));
-    const unmatched = new Set(); let bad = 0, dup = 0; const add = [];
+    const unmatched = new Set(); let bad = 0, dup = 0, invalid = 0; const add = [];
     for (const r of rows.slice(1)) {
       if (!r || r.every((c) => c === '' || c === null)) continue;
       const p = key.get(String(r[col.id]).trim().toUpperCase());
@@ -619,6 +645,7 @@
       if (col.glucoseType !== undefined && m.glucose !== undefined) m.glucoseType = String(r[col.glucoseType] || '隨機');
       if (col.symptoms !== undefined && r[col.symptoms]) m.symptoms = String(r[col.symptoms]).split(/[、,，;；]/).map((s) => E.SYMPTOM_BY_LABEL[s.trim()] || null).filter(Boolean);
       if (exist.has(m.personId + '|' + m.at)) { dup++; continue; }
+      if (E.validateMeasurement(m).length) { invalid++; continue; }
       add.push(m);
     }
     add.sort((a, b) => new Date(a.at) - new Date(b.at));
@@ -626,8 +653,9 @@
     for (const m of add) { db.measurements.push(m); const r = E.ingest(db, m.personId, m.at, sla()); if (r) last.set(m.personId, r.ev.overall); }
     const lv = { red: 0, orange: 0, yellow: 0 };
     for (const l of last.values()) if (l in lv) lv[l]++;
+    audit('匯入量測', `${add.length} 筆`);
     save(); render();
-    $('#meas-preview').innerHTML = `<p class="small">已匯入 <strong>${add.length}</strong> 筆（重複略過 ${dup}、時間無法解析 ${bad}、找不到民眾 ${unmatched.size} 人）。本次最新判定異常：紅 ${lv.red}、橙 ${lv.orange}、黃 ${lv.yellow} 人。</p>${unmatched.size ? `<p class="small muted">找不到的識別值：${[...unmatched].slice(0, 20).map((x) => esc(E.maskId(x))).join('、')}${unmatched.size > 20 ? '…' : ''}</p>` : ''}`;
+    $('#meas-preview').innerHTML = `<p class="small">已匯入 <strong>${add.length}</strong> 筆（重複略過 ${dup}、時間無法解析 ${bad}、數值超出合理範圍 ${invalid}、找不到民眾 ${unmatched.size} 人）。本次最新判定異常：紅 ${lv.red}、橙 ${lv.orange}、黃 ${lv.yellow} 人。</p>${unmatched.size ? `<p class="small muted">找不到的識別值：${[...unmatched].slice(0, 20).map((x) => esc(E.maskId(x))).join('、')}${unmatched.size > 20 ? '…' : ''}</p>` : ''}`;
   }
 
   // ───────────── 規則與設定 ─────────────
@@ -660,6 +688,16 @@
       <li>複測日已過未回站者，列入「待回站複測」，請通知民眾回站。</li>
       <li>結案原因限於：已轉由醫師持續管理（需登記回診日期）、死亡、遷出、失聯、拒絕。</li></ul></div>
     <div class="card" style="margin-top:12px"><h2>系統解讀（請臨床委員會確認）</h2><ol class="small">${E.ASSUMPTIONS.map((a) => `<li>${esc(a)}</li>`).join('')}</ol></div>
+    <div class="card" style="margin-top:12px"><h2>資訊安全</h2>
+      <div class="small" style="display:grid;grid-template-columns:auto 1fr;gap:4px 12px">
+        <span class="muted">資料保護</span><span>${db.demo ? '示範資料（虛構，未加密）' : vaultKey ? `✓ 已加密：AES-256-GCM，金鑰由通行密語經 PBKDF2-SHA256 ${window.Vault.ITER.toLocaleString()} 次衍生` : '<span class="overdue">未加密</span>'}</span>
+        <span class="muted">自動鎖定</span><span>閒置 ${IDLE_MIN} 分鐘；輸入錯誤 3 次後延遲重試</span>
+        <span class="muted">外部連線</span><span>無：不載入任何外部程式或字型，內容安全政策（CSP）禁止對外連線</span>
+        <span class="muted">稽核紀錄</span><span>${(db.audit || []).length} 筆（含解鎖、查看完整身分證號、匯出、匯入、還原、清除）</span>
+      </div>
+      ${vaultKey ? '<div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="chg-pass">變更通行密語</button><button class="btn sm" type="button" id="audit-exp">匯出稽核紀錄</button></div>' : ''}
+      ${(db.audit || []).length ? `<details style="margin-top:8px"><summary class="small">最近 100 筆稽核紀錄</summary><div class="tbl-wrap"><table class="small"><thead><tr><th>時間</th><th>操作者</th><th>動作</th><th>內容</th></tr></thead><tbody>${db.audit.slice(-100).reverse().map((a) => `<tr><td class="tnum">${fmtDT(a.at)}</td><td>${esc(a.user)}</td><td>${esc(a.action)}</td><td>${esc(a.detail)}</td></tr>`).join('')}</tbody></table></div></details>` : ''}
+      <p class="small muted">「操作者」目前為自行選擇，稽核紀錄存在本機加密資料內，無法防止有密語者竄改。正式上線需改接院內帳號登入與伺服器端稽核（見 README「正式上線前必須處理」）。</p></div>
     <div class="card" style="margin-top:12px"><h2>健康888 定義</h2>
       <div class="form-grid">
         <label class="f">觀察期（天，0 為全部）<input type="number" min="0" data-t888="lookbackDays" value="${t8.lookbackDays}"></label>
@@ -680,6 +718,107 @@
     </div>`;
   }
 
+  // ───────────── 資安：通行密語、鎖定、自動登出 ─────────────
+  const LOCK_KEY = 'chc-tracking-lock';
+  const IDLE_MIN = 15;
+  function lockState() { try { return JSON.parse(localStorage.getItem(LOCK_KEY)) || { fails: 0, until: 0 }; } catch (e) { return { fails: 0, until: 0 }; } }
+  function setLockState(x) { try { localStorage.setItem(LOCK_KEY, JSON.stringify(x)); } catch (e) { /* 忽略 */ } }
+
+  // 設定（或變更）通行密語；回傳 true 表示完成
+  function passphraseDialog(title, why) {
+    return new Promise((resolve) => {
+      dialog(title, `<p class="small">${esc(why || '')}</p>
+        <p class="small">資料會以 AES-256-GCM 加密存在這台電腦；金鑰由通行密語衍生（PBKDF2-SHA256 ${window.Vault.ITER.toLocaleString()} 次），只存在記憶體。<strong>遺失通行密語即無法還原資料</strong>，請由單位主管另行密封保管。</p>
+        <label class="f">通行密語（至少 ${window.Vault.MIN_LEN} 字，建議用一句好記的話）<input type="password" name="p1" autocomplete="new-password" required></label>
+        <label class="f" style="margin-top:8px">再輸入一次<input type="password" name="p2" autocomplete="new-password" required></label>`,
+      [{ label: '取消', onClick: () => { resolve(false); } }, { label: '設定並加密', primary: true, onClick: () => {
+        const fd = new FormData($('#dlg-form')); const a = fd.get('p1'), b = fd.get('p2');
+        window.Vault.checkPassphrase(a);
+        if (a !== b) throw new Error('兩次輸入不一致');
+        const btn = $('#dlg-foot .btn.primary'); btn.disabled = true; btn.textContent = '加密中…';
+        window.Vault.createKey(a).then((k) => { vaultKey = k; audit('設定通行密語', '資料改以新金鑰加密'); save(); resolve(true); $('#dlg').close(); })
+          .catch((e) => { toast(e.message); btn.disabled = false; btn.textContent = '設定並加密'; });
+        return false; // 金鑰衍生完成後才關閉對話框
+      } }]);
+      $('#dlg').addEventListener('close', () => setTimeout(() => resolve(!!vaultKey), 0), { once: true });
+    });
+  }
+  let asking = null;
+  function requirePassphrase() {
+    if (!asking) asking = passphraseDialog('設定通行密語', '目前資料含個人資料，必須加密後才能存在瀏覽器。').then((ok) => { asking = null; return ok; });
+    return asking;
+  }
+
+  // 啟動時資料已加密：顯示鎖定畫面
+  function unlockScreen(envelope) {
+    return new Promise((resolve) => {
+      $('#tabs').innerHTML = ''; $('.top-tools').hidden = true;
+      const draw = (msg) => {
+        const st = lockState(), wait = Math.max(0, Math.ceil((st.until - Date.now()) / 1000));
+        $('#app').innerHTML = `<div class="card" style="max-width:440px;margin:40px auto">
+          <h1>資料已加密鎖定</h1><p class="small">請輸入通行密語。閒置 ${IDLE_MIN} 分鐘會自動鎖定。</p>
+          <form id="unlock-form" onsubmit="return false"><label class="f">通行密語<input type="password" id="unlock-p" autocomplete="current-password" ${wait ? 'disabled' : ''} autofocus></label>
+          <div class="row" style="margin-top:10px"><button class="btn primary" id="unlock-btn" ${wait ? 'disabled' : ''}>解鎖</button></div></form>
+          ${msg ? `<p class="small overdue">${esc(msg)}</p>` : ''}${wait ? `<p class="small overdue">多次輸入錯誤，請 ${wait} 秒後再試。</p>` : ''}
+          <details class="small" style="margin-top:16px"><summary>忘記通行密語</summary><p>無法還原（沒有後門）。只能清除這台電腦上的加密資料，再從加密備份或原始名冊重新匯入。</p><button class="btn danger sm" type="button" id="forget-btn">清除本機加密資料</button></details></div>`;
+        if (wait) setTimeout(() => draw(), Math.min(wait, 5) * 1000);
+        const go = async () => {
+          const pw = $('#unlock-p').value; if (!pw) return;
+          $('#unlock-btn').disabled = true; $('#unlock-btn').textContent = '驗證中…';
+          try {
+            const r = await window.Vault.open(envelope, pw);
+            setLockState({ fails: 0, until: 0 });
+            vaultKey = r.k; db = r.data; $('.top-tools').hidden = false;
+            audit('解鎖', ''); resolve();
+          } catch (e) {
+            const st2 = lockState(); st2.fails = (st2.fails || 0) + 1;
+            if (st2.fails >= 3) st2.until = Date.now() + Math.min(900, 15 * Math.pow(2, st2.fails - 3)) * 1000;
+            setLockState(st2); draw(e.message);
+          }
+        };
+        $('#unlock-btn').onclick = go;
+        $('#forget-btn').onclick = () => { if (prompt('此動作會永久刪除本機的加密資料。請輸入「清除」確認') !== '清除') return; localStorage.removeItem(KEY); setLockState({ fails: 0, until: 0 }); location.reload(); };
+        const inp = $('#unlock-p'); if (inp && !wait) inp.focus();
+      };
+      draw();
+    });
+  }
+
+  // 鎖定：清掉記憶體中的金鑰與資料，重新載入頁面
+  function lockNow(reason) {
+    if (!vaultKey) return;
+    audit('鎖定', reason || '手動');
+    save();
+    saving.then(() => { vaultKey = null; db = null; location.reload(); });
+  }
+  let idleTimer = null;
+  function armIdle() {
+    clearTimeout(idleTimer);
+    if (vaultKey) idleTimer = setTimeout(() => lockNow(`閒置 ${IDLE_MIN} 分鐘自動鎖定`), IDLE_MIN * 60000);
+  }
+  ['mousemove', 'keydown', 'click', 'touchstart', 'scroll'].forEach((ev) => document.addEventListener(ev, () => { if (vaultKey) armIdle(); }, { passive: true, capture: true }));
+
+  async function boot() {
+    const raw = load();
+    if (raw && window.Vault.isEnvelope(raw)) await unlockScreen(raw);
+    else db = raw;
+  // 示範資料是以舊規則產生的：直接依新規則重新產生（保留設定）
+  if (db && db.demo && (db.rulesVersion !== E.RULES_VERSION || db.schema !== E.SCHEMA)) { const keep = db.settings; db = window.Demo.generate(new Date()); if (keep) db.settings = Object.assign(db.settings, keep); save(); setTimeout(() => toast('分層規則已更新，示範資料已依新規則重新產生'), 300); }
+  if (!db) { db = window.Demo.generate(new Date()); save(); }
+  // 正式資料：舊版七步驟流程轉成四步驟（每案寫入處理紀錄）
+  if (!db.demo && db.schema !== E.SCHEMA) { const n = E.migrateWorkflow(db); save(); if (n) setTimeout(() => toast(`流程已改為四步驟，${n} 筆追蹤案已轉換`), 300); }
+  db.settings = db.settings || {};
+  // 舊版預設的「個管師」名單換成 8 名社區護理師；使用者自訂的名單不動
+  if (!db.settings.nurses || !db.settings.nurses.length || db.settings.nurses.every((n) => /^個管師/.test(n))) db.settings.nurses = DEFAULT_NURSES.slice();
+    // 舊版留下的明文正式資料：要求立即設定通行密語加密
+    if (sensitive() && !vaultKey) {
+      render();
+      while (!(await requirePassphrase())) { /* 必須設定才可繼續使用 */ }
+    }
+    render();
+    armIdle();
+  }
+
   // ───────────── 事件 ─────────────
   const bind = {
     dashboard() {
@@ -694,7 +833,7 @@
       liveSearch('#wl-q', (v) => (ui.wl.q = v));
       $('#wl-export').onclick = () => {
         const now = new Date();
-        download(`追蹤工作清單_${fmtD(nowISO()).replace(/\//g, '')}.csv`, csv([['層級', '姓名', '識別', '據點', '異常項目', '階段', '下一步', '期限', '逾期', '負責'], ...worklistRows().map(({ e, p, s }) => [E.LEVEL_LABEL[e.level], pname(p), pid2(p), p.site, e.items.map((i) => `${E.ITEM_LABEL[i.key]}(${E.LEVEL_LABEL[i.level]})`).join(' '), E.STATE_LABEL[e.state], s.label, s.due ? fmtD(s.due) : '', s.overdue ? '是' : '', e.assignee || ''])]), 'text/csv');
+        exportCsv(`追蹤工作清單_${fmtD(nowISO()).replace(/\//g, '')}.csv`, ([['層級', '姓名', '識別', '據點', '異常項目', '階段', '下一步', '期限', '逾期', '負責'], ...worklistRows().map(({ e, p, s }) => [E.LEVEL_LABEL[e.level], pname(p), pid2(p), p.site, e.items.map((i) => `${E.ITEM_LABEL[i.key]}(${E.LEVEL_LABEL[i.level]})`).join(' '), E.STATE_LABEL[e.state], s.label, s.due ? fmtD(s.due) : '', s.overdue ? '是' : '', e.assignee || ''])]), '追蹤工作清單');
         void now;
       };
     },
@@ -708,7 +847,7 @@
       const ep = IX.open.get(id);
       $('#add-m').onclick = () => measurementDialog(p);
       const a2 = $('#add-m2'); if (a2) a2.onclick = () => measurementDialog(p);
-      const sn = $('#show-nid'); if (sn) sn.onclick = () => { $('#nid').textContent = p.nationalId; sn.remove(); };
+      const sn = $('#show-nid'); if (sn) sn.onclick = () => { $('#nid').textContent = p.nationalId; sn.remove(); audit('查看完整身分證號', `${p.name}（${p.id}）`); save(); };
       $$('[data-flag]').forEach((c) => (c.onchange = () => { p[c.dataset.flag] = c.checked; save(); render(); toast('已更新風險註記；下次量測起依新註記判定'); }));
       const lr = $('#life-rx'); if (lr) lr.onclick = () => { const l = IX.latest(p.id); printRx(p, null, E.lifestylePrescription(p, l.ev)); };
       const sb = $('#spo2-base'); if (sb) sb.onchange = () => { p.spo2Baseline = sb.value === '' ? null : +sb.value; save(); };
@@ -724,7 +863,7 @@
       $('#close-btn').onclick = () => {
         const reason = $('#close-reason').value;
         if (!confirm(`確定以「${reason}」結案？`)) return;
-        try { E.act(db, ep.id, 'close', { reason, note: $('#close-note').value, followupDate: $('#close-followup').value }, nowISO(), ui.user, sla()); save(); render(); toast('已結案'); } catch (err) { toast(err.message); }
+        try { E.act(db, ep.id, 'close', { reason, note: $('#close-note').value, followupDate: $('#close-followup').value }, nowISO(), ui.user, sla()); audit('結案', `${p.name}：${reason}`); save(); render(); toast('已結案'); } catch (err) { toast(err.message); }
       };
     },
     quality() {
@@ -738,20 +877,50 @@
           for (const [k, t] of [['redSameDay', '紅層當日處理率'], ['orangeConfirm', '橙層就醫確認率'], ['retest', '複測完成率'], ['improve', '降級(改善)率']]) rows.push([s, w || '全部', t, q[k].k, q[k].n, q[k].p === null ? '' : q[k].p.toFixed(4), q[k].lo === null ? '' : q[k].lo.toFixed(4), q[k].hi === null ? '' : q[k].hi.toFixed(4)]);
           rows.push([s, w || '全部', '未閉環逾期案數', q.unclosed, q.openCount, '', '', '']);
         }
-        download('品質指標.csv', csv(rows), 'text/csv');
+        exportCsv('品質指標.csv', rows, '品質指標');
       };
     },
     import() {
       $('#roster-file').onchange = (e) => { const f = e.target.files[0]; if (f) readWorkbook(f).then(previewRoster).then(() => {
-        $('#roster-go').onclick = () => { if (db.demo && !confirm('匯入正式名冊會清除示範資料，確定？')) return; commitRoster(); };
-        $('#roster-issues').onclick = () => download('名冊問題清單.csv', csv([['工作表', '列', '姓名', '問題'], ...pendingRoster.issues.map((i) => [i.sheet, i.row, i.name, i.issues.join('；')])]), 'text/csv');
+        $('#roster-go').onclick = async () => {
+          if (db.demo && !confirm('匯入正式名冊會清除示範資料，確定？')) return;
+          const fresh = !vaultKey;
+          if (fresh && !(await passphraseDialog('設定通行密語', '名冊含姓名、身分證號與電話，匯入前必須設定通行密語加密。'))) return;
+          commitRoster(fresh);
+        };
+        $('#roster-issues').onclick = () => exportCsv('名冊問題清單.csv', [['工作表', '列', '姓名', '問題'], ...pendingRoster.issues.map((i) => [i.sheet, i.row, i.name, i.issues.join('；')])], '名冊問題清單');
       }).catch((err) => toast(err.message)); };
-      $('#meas-file').onchange = (e) => { const f = e.target.files[0]; if (!f) return; readWorkbook(f).then((wb) => importMeasurements(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' }))).catch((err) => toast(err.message)); };
+      $('#meas-file').onchange = (e) => { const f = e.target.files[0]; if (!f) return; readWorkbook(f).then((wb) => importMeasurements(wb.rows.get(wb.SheetNames[0]))).catch((err) => toast(err.message)); };
       $('#tpl').onclick = () => download('量測匯入範本.csv', csv([M_COLS.map((c) => c[0]), [db.persons[0] ? (db.persons[0].demoId || '請填身分證號') : 'A123456789', '2026-10-30 09:15', 138, 86, 78, '', 96, 36.5, 112, '空腹', 135, 160, 48, '', '', 62.5, 86, 31.2, '']]), 'text/csv');
-      $('#bk-exp').onclick = () => download(`健康站追蹤備份_${fmtD(nowISO()).replace(/\//g, '')}.json`, JSON.stringify(db), 'application/json');
-      $('#bk-imp').onchange = (e) => { const f = e.target.files[0]; if (!f) return; f.text().then((t) => { const d = JSON.parse(t); if (!d.persons || !d.episodes) throw new Error('不是有效的備份檔'); if (!confirm('以備份覆蓋目前資料？')) return; db = d; save(); render(); toast('已還原備份'); }).catch((err) => toast(err.message)); };
-      $('#demo-load').onclick = () => { if (!confirm('以示範資料覆蓋目前所有資料？')) return; db = window.Demo.generate(new Date()); save(); render(); };
-      $('#wipe').onclick = () => { if (!confirm('清除全部資料（無法復原）？建議先匯出備份。')) return; db = { persons: [], measurements: [], episodes: [], settings: db.settings, rulesVersion: E.RULES_VERSION, schema: E.SCHEMA }; save(); render(); };
+      // 備份：正式資料一律加密匯出（用目前的通行密語）；示範資料為明文
+      $('#bk-exp').onclick = async () => {
+        const name = `健康站追蹤備份_${fmtD(nowISO()).replace(/\//g, '')}${sensitive() ? '_加密' : ''}.json`;
+        if (sensitive()) {
+          if (!vaultKey) { toast('請先設定通行密語'); return; }
+          audit('匯出加密備份', name); save();
+          download(name, JSON.stringify(await window.Vault.seal(vaultKey, db, 'chc-backup')), 'application/json');
+        } else download(name, JSON.stringify(db), 'application/json');
+      };
+      $('#bk-imp').onchange = (e) => {
+        const f = e.target.files[0]; if (!f) return;
+        if (f.size > 50 * 1024 * 1024) { toast('備份檔過大'); return; }
+        f.text().then(async (t) => {
+          let d = JSON.parse(t), k = null;
+          if (window.Vault.isEnvelope(d)) {
+            const pw = prompt('這是加密備份，請輸入當時的通行密語'); if (!pw) return;
+            const r = await window.Vault.open(d, pw, 'chc-backup'); d = r.data; k = r.k;
+          }
+          E.validateBackup(d);
+          if (!confirm(`以備份覆蓋目前資料？（${d.persons.length} 位民眾、${d.episodes.length} 個追蹤輪次）`)) return;
+          db = d;
+          if (!db.demo && !vaultKey) vaultKey = k;
+          if (sensitive() && !vaultKey && !(await passphraseDialog('設定通行密語', '還原的資料含個人資料，必須加密儲存。'))) { location.reload(); return; }
+          if (!db.demo && db.schema !== E.SCHEMA) E.migrateWorkflow(db);
+          audit('還原備份', f.name); save(); render(); toast('已還原備份');
+        }).catch((err) => toast(err.message));
+      };
+      $('#demo-load').onclick = () => { if (!confirm('以示範資料覆蓋目前所有資料？（加密的正式資料會被刪除，請先匯出加密備份）')) return; db = window.Demo.generate(new Date()); vaultKey = null; save(); render(); };
+      $('#wipe').onclick = () => { if (!confirm('清除全部資料（無法復原）？建議先匯出備份。')) return; audit('清除全部資料', ''); db = { persons: [], measurements: [], episodes: [], audit: db.audit, settings: db.settings, rulesVersion: E.RULES_VERSION, schema: E.SCHEMA }; save(); render(); };
     },
     888() {
       $$('[data-gap]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); ui.gap888 = a.dataset.gap; render(); }));
@@ -760,7 +929,7 @@
         const c = E.cascade888(db, new Date(), t888(), inSite);
         const rows = [['缺口', '姓名', '識別', '據點', '管理層級', '建議動作']];
         for (const [k, [t, a]] of Object.entries(GAPS)) for (const id of c.ids[k]) { const p = IX.byPerson.get(id); rows.push([t, pname(p), pid2(p), p.site, E.LEVEL_LABEL[IX.mgmt(id)] || '未量測', a]); }
-        download('健康888缺口名單.csv', csv(rows), 'text/csv');
+        exportCsv('健康888缺口名單.csv', rows, '健康888缺口名單');
       };
     },
     rules() {
@@ -773,6 +942,8 @@
         save(); render(); toast('設定已儲存');
       };
       $('#mask').onchange = (e) => { ui.mask = e.target.checked; render(); };
+      const cp = $('#chg-pass'); if (cp) cp.onclick = async () => { if (await passphraseDialog('變更通行密語', '設定新密語後，資料會立即以新金鑰重新加密；舊的加密備份仍需用舊密語開啟。')) { audit('變更通行密語', ''); save(); render(); toast('已變更通行密語'); } };
+      const ae = $('#audit-exp'); if (ae) ae.onclick = () => exportCsv('稽核紀錄.csv', [['時間', '操作者', '動作', '內容'], ...(db.audit || []).map((a) => [a.at, a.user, a.action, a.detail])], '稽核紀錄');
     },
   };
 
@@ -787,6 +958,7 @@
   });
   $('#site-filter').onchange = (e) => { ui.site = e.target.value; render(); };
   $('#user-sel').onchange = (e) => { ui.user = e.target.value; saveUI(); };
+  $('#lock-btn').onclick = () => lockNow('手動鎖定');
   $('#theme-btn').onclick = () => {
     const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
     document.documentElement.dataset.theme = cur === 'dark' ? 'light' : 'dark'; ui.theme = document.documentElement.dataset.theme; saveUI(); themeLabel();
@@ -796,14 +968,5 @@
   themeLabel();
   window.addEventListener('hashchange', () => { window.scrollTo(0, 0); render(); });
 
-  db = load();
-  // 示範資料是以舊規則產生的：直接依新規則重新產生（保留設定）
-  if (db && db.demo && (db.rulesVersion !== E.RULES_VERSION || db.schema !== E.SCHEMA)) { const keep = db.settings; db = window.Demo.generate(new Date()); if (keep) db.settings = Object.assign(db.settings, keep); save(); setTimeout(() => toast('分層規則已更新，示範資料已依新規則重新產生'), 300); }
-  if (!db) { db = window.Demo.generate(new Date()); save(); }
-  // 正式資料：舊版七步驟流程轉成四步驟（每案寫入處理紀錄）
-  if (!db.demo && db.schema !== E.SCHEMA) { const n = E.migrateWorkflow(db); save(); if (n) setTimeout(() => toast(`流程已改為四步驟，${n} 筆追蹤案已轉換`), 300); }
-  db.settings = db.settings || {};
-  // 舊版預設的「個管師」名單換成 8 名社區護理師；使用者自訂的名單不動
-  if (!db.settings.nurses || !db.settings.nurses.length || db.settings.nurses.every((n) => /^個管師/.test(n))) db.settings.nurses = DEFAULT_NURSES.slice();
-  render();
+  boot();
 })();

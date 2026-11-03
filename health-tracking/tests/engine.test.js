@@ -314,6 +314,26 @@ t('regradeOpen keeps the highest level since the case opened (no silent downgrad
   assert.equal(ep.state, 'detected');
 });
 
+// ── 資安：輸入驗證
+t('validateMeasurement rejects implausible values', () => {
+  assert.deepEqual(E.validateMeasurement({ at: '2026-01-01T00:00:00Z', sbp: 130, dbp: 80 }), []);
+  assert.equal(E.validateMeasurement({ at: '2026-01-01T00:00:00Z', sbp: 1500, dbp: 80 }).length, 1);
+  assert.ok(E.validateMeasurement({ at: '2026-01-01T00:00:00Z', sbp: 80, dbp: 90 })[0].includes('舒張壓'));
+  assert.ok(E.validateMeasurement({ at: 'x', temp: 36 })[0].includes('時間'));
+  assert.ok(E.validateMeasurement({ at: new Date(Date.now() + 864e5).toISOString(), temp: 36 })[0].includes('未來'));
+});
+t('validateBackup accepts generated data and rejects injection attempts', () => {
+  const D2 = require('../demo.js'); const good = D2.generate(new Date(2026, 10, 3, 10));
+  assert.ok(E.validateBackup(JSON.parse(JSON.stringify(good))));
+  const evil = JSON.parse(JSON.stringify(good)); evil.persons[0].id = 'x" onmouseover="alert(1)';
+  assert.throws(() => E.validateBackup(evil), /編號/);
+  const evil2 = JSON.parse(JSON.stringify(good)); evil2.episodes[0].level = 'red);background:url(//x)';
+  assert.throws(() => E.validateBackup(evil2), /層級/);
+  const evil3 = JSON.parse(JSON.stringify(good)); evil3.measurements[0].sbp = '<img src=x>';
+  assert.throws(() => E.validateBackup(evil3), /數值/);
+  assert.throws(() => E.validateBackup({ persons: [] }), /缺少/);
+});
+
 // ── 統計
 t('wilson', () => { const w = E.wilson(8, 10); assert.ok(Math.abs(w.lo - 0.4902) < 0.001 && Math.abs(w.hi - 0.9433) < 0.001); });
 

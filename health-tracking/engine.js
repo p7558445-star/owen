@@ -911,6 +911,57 @@
     return { persons, issues, skipped };
   }
 
+  // ───────────────────────── 輸入驗證（資料完整性與安全） ─────────────────────────
+  // 生理上合理的範圍；超出者視為輸入或設備錯誤，拒收
+  const RANGES = { sbp: [50, 300], dbp: [20, 200], pulse: [20, 250], spo2: [50, 100], temp: [30, 45], glucose: [10, 1000], ldl: [10, 500], tg: [10, 5000], hdl: [5, 200], tc: [50, 800], ua: [0.5, 20], weight: [20, 300], waist: [30, 200], bodyFat: [2, 75], hba1c: [3, 20] };
+  const RANGE_LABEL = { sbp: '收縮壓', dbp: '舒張壓', pulse: '脈搏', spo2: '血氧', temp: '體溫', glucose: '血糖', ldl: 'LDL', tg: '三酸甘油脂', hdl: 'HDL', tc: '總膽固醇', ua: '尿酸', weight: '體重', waist: '腰圍', bodyFat: '體脂率', hba1c: 'HbA1c' };
+  function validateMeasurement(m) {
+    const issues = [];
+    for (const [k, [lo, hi]] of Object.entries(RANGES)) {
+      if (m[k] === undefined || m[k] === null || m[k] === '') continue;
+      const v = Number(m[k]);
+      if (!isFinite(v) || v < lo || v > hi) issues.push(`${RANGE_LABEL[k]} ${m[k]} 超出合理範圍（${lo}–${hi}）`);
+    }
+    if (m.sbp != null && m.dbp != null && Number(m.dbp) >= Number(m.sbp)) issues.push('舒張壓不可高於或等於收縮壓');
+    const t = new Date(m.at);
+    if (isNaN(t)) issues.push('量測時間無法解析');
+    else if (t - Date.now() > 5 * 60000) issues.push('量測時間在未來');
+    return issues;
+  }
+
+  // 還原備份：只接受預期的結構、ID 格式與列舉值，防止竄改的備份檔注入內容
+  const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+  const LEVEL_SET = new Set(['green', 'yellow', 'orange', 'red', 'na']);
+  const STATE_SET = new Set(['detected', 'notified', 'intervened', 'confirmed', 'closed', 'pending', 'retested', 'judged']);
+  function validateBackup(d) {
+    const bad = (msg) => { throw new Error('備份檔驗證失敗：' + msg); };
+    if (!d || typeof d !== 'object' || Array.isArray(d)) bad('格式不正確');
+    for (const k of ['persons', 'measurements', 'episodes']) if (!Array.isArray(d[k])) bad(`缺少 ${k}`);
+    if (d.persons.length > 200000 || d.measurements.length > 5000000 || d.episodes.length > 2000000) bad('資料量異常');
+    const ids = new Set();
+    for (const p of d.persons) {
+      if (!p || !SAFE_ID.test(String(p.id))) bad('民眾編號格式不正確');
+      if (typeof p.name !== 'string' || p.name.length > 50) bad('姓名格式不正確');
+      if (p.sex != null && !['M', 'F'].includes(p.sex)) bad('性別格式不正確');
+      if (p.site != null && (typeof p.site !== 'string' || p.site.length > 60)) bad('據點格式不正確');
+      if (p.nationalId != null && !/^[A-Z][1289]\d{8}$/.test(p.nationalId)) bad('身分證號格式不正確');
+      ids.add(p.id);
+    }
+    for (const m of d.measurements) {
+      if (!m || !SAFE_ID.test(String(m.id)) || !ids.has(m.personId)) bad('量測紀錄對應不到民眾');
+      if (isNaN(new Date(m.at))) bad('量測時間格式不正確');
+      for (const k of Object.keys(RANGES)) if (m[k] != null && typeof m[k] !== 'number') bad('量測數值格式不正確');
+    }
+    for (const e of d.episodes) {
+      if (!e || !SAFE_ID.test(String(e.id)) || !ids.has(e.personId)) bad('追蹤案對應不到民眾');
+      if (!LEVEL_SET.has(e.level) || !LEVEL_SET.has(e.initialLevel || e.level)) bad('層級格式不正確');
+      if (!STATE_SET.has(e.state)) bad('追蹤狀態格式不正確');
+      if (!Array.isArray(e.log) || !Array.isArray(e.items)) bad('追蹤案內容不完整');
+      for (const i of e.items) if (!ITEM_LABEL[i.key] || !LEVEL_SET.has(i.level)) bad('異常項目格式不正確');
+    }
+    return true;
+  }
+
   function maskId(id) { return id ? id.slice(0, 2) + '****' + id.slice(-4) : '—'; }
   function maskName(n) { if (!n) return ''; const a = [...n]; return a.length <= 2 ? a[0] + 'Ｏ' : a[0] + 'Ｏ'.repeat(a.length - 2) + a[a.length - 1]; }
 
@@ -982,7 +1033,7 @@
   const Engine = {
     LEVELS, RANK, LEVEL_LABEL, LEVEL_MEANING, ITEMS, ITEM_LABEL, SYMPTOMS, SYMPTOM_BY_LABEL, ASSUMPTIONS, DEFAULT_SLA, CLOSE_REASONS,
     STATES, OPEN_STATES, STATE_LABEL, isOpen, recheckOverdue, SCHEMA, migrateWorkflow, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, DOWNGRADE_888, KEYS_888, cascade888,
-    LIFESTYLE, lifestylePrescription, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
+    LIFESTYLE, lifestylePrescription, RANGES, validateMeasurement, validateBackup, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
     maxLevel, evaluateSession, groupSessions, ingest, act, nextStep, quality, wilson, prescription,
     parseRoster, parseBirth, validTwId, maskId, maskName, ageAt, addDays, sameDay, normGluType, uid,
   };

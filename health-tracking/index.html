@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'">
+<meta name="referrer" content="no-referrer">
 <title>健康站追蹤後台</title>
 <meta name="description" content="彰基社區智慧健康站：量測異常紅橙黃綠分層管理與閉環追蹤後台">
 <style>
@@ -180,6 +182,7 @@ details > summary { cursor: pointer; color: var(--ink-2); }
       <label class="small muted" for="user-sel">操作者</label>
       <select id="user-sel" aria-label="目前操作者"></select>
       <button class="btn sm" id="theme-btn" type="button" aria-label="切換深淺色">深色</button>
+      <button class="btn sm" id="lock-btn" type="button" hidden title="立即鎖定（閒置 15 分鐘也會自動鎖定）">🔒 鎖定</button>
     </div>
     <nav class="tabs" id="tabs"></nav>
   </div>
@@ -187,7 +190,8 @@ details > summary { cursor: pointer; color: var(--ink-2); }
 <main id="app" aria-live="polite"></main>
 <dialog id="dlg"><form method="dialog" id="dlg-form"><div class="d-head"><strong id="dlg-title"></strong><button class="btn sm" value="cancel" formnovalidate>關閉</button></div><div class="d-body" id="dlg-body"></div><div class="d-foot" id="dlg-foot"></div></form></dialog>
 <div class="toast" id="toast" role="status"></div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="vault.js"></script>
+<script src="xlsx-reader.js"></script>
 <script src="rx-library.js"></script>
 <script src="engine.js"></script>
 <script src="demo.js"></script>

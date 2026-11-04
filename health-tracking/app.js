@@ -302,7 +302,9 @@
   }
   function worklist() {
     const f = ui.wl, rows = worklistRows();
+    const stale = (!SERVER || SERVER.user.role === 'admin') ? E.restartClock(db, nowISO(), sla(), '', true) : 0;
     return `<h1>追蹤工作清單</h1>
+    ${stale ? `<div class="banner row spread no-print"><span>有 <strong>${stale}</strong> 案仍在「偵測」、尚未有人處理就已逾期，多半是匯入歷史量測造成。可讓這些案件的期限從今天重新起算（每案都會寫入處理紀錄；已有人處理的案件不受影響）。</span><button class="btn sm primary" type="button" id="restart-clock">期限從今天重新起算</button></div>` : ''}
     <div class="filters">
       <div class="chips" role="group" aria-label="層級">${['red', 'orange', 'yellow'].map((l) => `<button type="button" class="chip" data-lvf="${l}" aria-pressed="${f.levels.includes(l)}">${E.LEVEL_LABEL[l]}層</button>`).join('')}</div>
       <select id="wl-state" aria-label="階段"><option value="all">全部階段</option>${E.OPEN_STATES.map((s) => `<option value="${s}" ${f.state === s ? 'selected' : ''}>${E.STATE_LABEL[s]}</option>`).join('')}</select>
@@ -1055,6 +1057,12 @@
       $$('[data-lvf]').forEach((b) => (b.onclick = () => { const l = b.dataset.lvf, a = ui.wl.levels; ui.wl.levels = a.includes(l) ? a.filter((x) => x !== l) : [...a, l]; render(); }));
       $('#wl-state').onchange = (e) => { ui.wl.state = e.target.value; render(); };
       $('#wl-od').onchange = (e) => { ui.wl.overdue = e.target.checked; render(); };
+      const rc = $('#restart-clock');
+      if (rc) rc.onclick = () => {
+        if (!confirm('讓尚未處理的逾期案件，期限從今天重新起算？')) return;
+        if (SERVER) { srv(api('restart-clock', {}), (j) => `已重新起算 ${j.count} 案的期限`); return; }
+        const n = E.restartClock(db, nowISO(), sla(), ui.user); audit('期限重新起算', `${n} 案`); save(); render(); toast(`已重新起算 ${n} 案的期限`);
+      };
       $('#wl-mine').onchange = (e) => { ui.wl.mine = e.target.checked; render(); };
       liveSearch('#wl-q', (v) => (ui.wl.q = v));
       $('#wl-export').onclick = () => {

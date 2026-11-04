@@ -357,6 +357,11 @@ route('POST', /^\/api\/settings$/, { admin: true, limit: 16384 }, async (req, re
   persist(); audit(req, '變更設定', '', '處理時限、健康888 定義');
   send(res, 200, { data: scoped(req.user) });
 });
+route('POST', /^\/api\/restart-clock$/, { admin: true }, async (req, res) => {
+  const count = E.restartClock(DB, new Date().toISOString(), sla(), req.user.name);
+  persist(); audit(req, '期限重新起算', '', `${count} 案`);
+  send(res, 200, { data: scoped(req.user), count });
+});
 route('POST', /^\/api\/regrade$/, { admin: true }, async (req, res) => {
   const ch = E.regradeOpen(DB, new Date().toISOString(), sla(), req.user.name);
   persist(); audit(req, '依新規則重新判定', '', `${ch.length} 案`);

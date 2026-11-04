@@ -439,7 +439,7 @@
     const ep = {
       id: uid('ep'), personId: person.id, cycle: prev.length + 1, parentId: prev.length ? prev[prev.length - 1].id : null,
       level: lv, initialLevel: lv, items: summarizeItems(ev), emergency: ev.emergency, provisional: ev.provisional,
-      state: 'detected', detectedAt: session.at, levelAt: at, detectSessionId: session.id, levelSessionId: session.id, basisSessionIds: basis || [session.id], createdAt: at,
+      state: 'detected', detectedAt: session.at, levelAt: at, clockStart: at, detectSessionId: session.id, levelSessionId: session.id, basisSessionIds: basis || [session.id], createdAt: at,
       sessions: [session.id], log: [],
     };
     ep.due = computeDue(ep, sla, ep.items);
@@ -633,6 +633,20 @@
     return ep;
   }
 
+  // 尚未有人處理（仍在「偵測」）且已逾期的輪次：期限從指定時間重新起算，寫入處理紀錄
+  function restartClock(db, now, slaOverride, by, dryRun) {
+    const sla = Object.assign({}, DEFAULT_SLA, slaOverride || {});
+    const at = now || new Date().toISOString();
+    const eps = db.episodes.filter((e) => e.state === 'detected' && !e.notify && nextStep(e, at).overdue);
+    if (dryRun) return eps.length;
+    for (const e of eps) {
+      e.levelAt = at; e.clockStart = at;
+      e.due = computeDue(e, sla, e.items);
+      log(e, at, 'clock', `期限從 ${at.slice(0, 10)} 重新起算（歷史資料匯入，原本未處理）`, by);
+    }
+    return eps.length;
+  }
+
   // 下一步與是否逾期
   function nextStep(ep, now) {
     const t = new Date(now || Date.now());
@@ -706,7 +720,7 @@
     const gone = (e) => e.close && ['死亡', '遷出'].includes(e.close.reason);
 
     const red = eps.filter((e) => e.initialLevel === 'red');
-    const redSameDay = red.filter((e) => { const iv = firstLog(e, 'intervened'); return iv && sameDay(iv.at, e.detectedAt); });
+    const redSameDay = red.filter((e) => { const iv = firstLog(e, 'intervened'); return iv && sameDay(iv.at, e.clockStart || e.detectedAt); });
 
     const orangeDue = eps.filter((e) => e.initialLevel === 'orange' && (e.confirm || (e.due.confirm && new Date(e.due.confirm) < t)) && !gone(e));
     const orangeOk = orangeDue.filter((e) => e.confirm && e.confirm.type === 'visit' && new Date(e.confirm.at) <= new Date(e.due.confirm));
@@ -1082,7 +1096,9 @@
     };
     if (dryRun) return Object.assign(summary, { added: add.length, dryRun: true });
     const last = new Map();
-    for (const m of add) { db.measurements.push(m); const res = ingest(db, m.personId, m.at, slaOverride); if (res) last.set(m.personId, res.ev.overall); }
+    // 期限從匯入時間起算（偵測日仍顯示實際量測日），避免歷史資料一匯入就大量逾期
+    const importAt = (opts && opts.now) || new Date().toISOString();
+    for (const m of add) { db.measurements.push(m); const res = ingest(db, m.personId, new Date(m.at) > new Date(importAt) ? m.at : importAt, slaOverride); if (res) last.set(m.personId, res.ev.overall); }
     const levels = { red: 0, orange: 0, yellow: 0 };
     for (const l of last.values()) if (l in levels) levels[l]++;
     return Object.assign(summary, { added: add.length, levels });
@@ -1210,7 +1226,7 @@
   const Engine = {
     LEVELS, RANK, LEVEL_LABEL, LEVEL_MEANING, ITEMS, ITEM_LABEL, SYMPTOMS, SYMPTOM_BY_LABEL, ASSUMPTIONS, DEFAULT_SLA, CLOSE_REASONS,
     STATES, OPEN_STATES, STATE_LABEL, isOpen, recheckOverdue, SCHEMA, migrateWorkflow, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, DOWNGRADE_888, KEYS_888, cascade888,
-    LIFESTYLE, lifestylePrescription, DEFAULT_SITE_ALIASES, normalizeSite, parseSiteNurseSheet, applySiteNurses, RANGES, validateMeasurement, validateBackup, mergeRoster, importMeasurementRows, IMPORT_ALIAS, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
+    LIFESTYLE, lifestylePrescription, restartClock, DEFAULT_SITE_ALIASES, normalizeSite, parseSiteNurseSheet, applySiteNurses, RANGES, validateMeasurement, validateBackup, mergeRoster, importMeasurementRows, IMPORT_ALIAS, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
     maxLevel, evaluateSession, groupSessions, ingest, act, nextStep, quality, wilson, prescription,
     parseRoster, parseBirth, validTwId, maskId, maskName, ageAt, addDays, sameDay, normGluType, uid,
   };

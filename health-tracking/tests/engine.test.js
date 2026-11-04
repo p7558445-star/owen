@@ -383,6 +383,27 @@ t('new rounds auto-assigned to the site nurse; open rounds reassigned with a log
   assert.equal(ep.assignee, '林芷彤'); assert.ok(ep.log[ep.log.length - 1].text.includes('陳佩君 → 林芷彤'));
 });
 
+// ── 期限從匯入日起算
+t('import: deadlines start at import time; detection date stays the measurement date', () => {
+  const rows = [['識別值', '量測時間', '收縮壓', '舒張壓'], ['A123456789', '2026-07-01 09:00', 185, 100]];
+  const db = { persons: [{ id: 'p1', name: 'x', sex: 'M', birth: '1950-01-01', nationalId: 'A123456789', site: 'A' }], measurements: [], episodes: [] };
+  E.importMeasurementRows(db, rows, null, null, { now: '2026-11-04T02:00:00.000Z' });
+  const ep = db.episodes[0];
+  assert.equal(ep.level, 'red'); assert.equal(new Date(ep.detectedAt).getMonth(), 6, 'detected in July');
+  assert.ok(!E.nextStep(ep, '2026-11-04T05:00:00.000Z').overdue, 'not overdue right after import');
+  assert.ok(E.nextStep(ep, '2026-11-06T05:00:00.000Z').overdue, 'red still due the same day as import');
+});
+t('restartClock: only untouched overdue rounds, logged', () => {
+  const db = db0();
+  const { episode: a } = add(db, D(1), { sbp: 165, dbp: 85 });
+  const db2 = db0(); const { episode: b2 } = add(db2, D(1), { sbp: 165, dbp: 85 }); E.act(db2, b2.id, 'notify', {}, D(2));
+  assert.equal(E.restartClock(db, D(60), null, 'x', true), 1, 'dry run counts');
+  assert.equal(a.due.notify < D(60), true);
+  E.restartClock(db, D(60), null, '管理者');
+  assert.ok(!E.nextStep(a, D(60)).overdue); assert.ok(a.log[a.log.length - 1].text.includes('重新起算'));
+  assert.equal(E.restartClock(db2, D(60)), 0, 'handled rounds keep their real timeline');
+});
+
 // ── 統計
 t('wilson', () => { const w = E.wilson(8, 10); assert.ok(Math.abs(w.lo - 0.4902) < 0.001 && Math.abs(w.hi - 0.9433) < 0.001); });
 

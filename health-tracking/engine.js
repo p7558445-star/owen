@@ -962,6 +962,66 @@
     return true;
   }
 
+  // ───────────────────────── 資料匯入（單機版與伺服器版共用） ─────────────────────────
+  const IMPORT_ALIAS = { id: ['識別值', '身分證', '證號', '個案編號', 'id'], at: ['量測時間', '時間', '日期'], sbp: ['收縮壓', 'sbp'], dbp: ['舒張壓', 'dbp'], pulse: ['脈搏', '心率', 'pulse', 'hr'], arr: ['心律', 'arr', '房顫'], spo2: ['血氧', 'spo2'], temp: ['體溫', 'temp'], glucoseType: ['血糖類型', '血糖種類'], glucose: ['血糖', 'glucose'], ldl: ['ldl', '低密度'], tg: ['三酸甘油', 'tg'], hdl: ['hdl', '高密度'], tc: ['總膽固醇', 'tc'], ua: ['尿酸', 'ua'], weight: ['體重', 'weight'], waist: ['腰圍', 'waist'], bodyFat: ['體脂', 'fat'], symptoms: ['症狀'] };
+  const NUM_FIELDS = ['sbp', 'dbp', 'pulse', 'spo2', 'temp', 'glucose', 'ldl', 'tg', 'hdl', 'tc', 'ua', 'weight', 'waist', 'bodyFat'];
+
+  // 名冊合併：以身分證號比對，已存在者更新基本資料。allow(site) 可限制只能寫入有權限的據點
+  function mergeRoster(db, roster, allow) {
+    const byId = new Map(db.persons.filter((p) => p.nationalId).map((p) => [p.nationalId, p]));
+    let add = 0, upd = 0, denied = 0;
+    for (const r of roster) {
+      if (allow && !allow(r.site)) { denied++; continue; }
+      const ex = r.nationalId && byId.get(r.nationalId);
+      if (ex) {
+        if (allow && !allow(ex.site)) { denied++; continue; }
+        Object.assign(ex, { name: r.name, sex: r.sex || ex.sex, birth: r.birth || ex.birth, heightCm: r.heightCm ?? ex.heightCm, phone: r.phone || ex.phone, site: r.site });
+        upd++; continue;
+      }
+      const p = { id: uid('p'), name: r.name, sex: r.sex, birth: r.birth, heightCm: r.heightCm, nationalId: r.nationalId, phone: r.phone, site: r.site };
+      db.persons.push(p); if (p.nationalId) byId.set(p.nationalId, p); add++;
+    }
+    return { add, upd, denied };
+  }
+
+  // 量測檔（第一列為標題）轉為量測紀錄並依時間逐筆判定。canWrite(person) 可限制據點權限
+  function importMeasurementRows(db, rows, slaOverride, canWrite) {
+    const head = (rows[0] || []).map((h) => String(h).trim().toLowerCase());
+    const col = {};
+    for (const [k, al] of Object.entries(IMPORT_ALIAS)) {
+      const i = head.findIndex((h, j) => al.some((a) => h.includes(a.toLowerCase())) && !Object.values(col).includes(j) && !(k === 'glucose' && h.includes('類')));
+      if (i >= 0) col[k] = i;
+    }
+    if (col.id === undefined || col.at === undefined) throw new Error('找不到「識別值」或「量測時間」欄位');
+    const key = new Map();
+    for (const p of db.persons) { if (p.nationalId) key.set(p.nationalId, p); if (p.demoId) key.set(p.demoId, p); }
+    const exist = new Set(db.measurements.map((m) => m.personId + '|' + m.at));
+    const unmatched = new Set(); let bad = 0, dup = 0, invalid = 0, denied = 0; const add = [];
+    for (const r of rows.slice(1)) {
+      if (!Array.isArray(r) || r.every((c) => c === '' || c === null)) continue;
+      const p = key.get(String(r[col.id]).trim().toUpperCase());
+      if (!p) { unmatched.add(String(r[col.id])); continue; }
+      if (canWrite && !canWrite(p)) { denied++; continue; }
+      const t = r[col.at] instanceof Date ? r[col.at] : new Date(String(r[col.at]).replace(/\//g, '-').replace(' ', 'T'));
+      if (isNaN(t)) { bad++; continue; }
+      const m = { id: uid('m'), personId: p.id, at: t.toISOString(), source: 'import' };
+      for (const k of NUM_FIELDS) if (col[k] !== undefined && r[col[k]] !== '' && r[col[k]] !== null && !isNaN(+r[col[k]])) m[k] = +r[col[k]];
+      if (col.arr !== undefined && /^(y|yes|1|是|true|arr)/i.test(String(r[col.arr]))) m.arr = true;
+      if (col.glucoseType !== undefined && m.glucose !== undefined) m.glucoseType = String(r[col.glucoseType] || '隨機').slice(0, 10);
+      if (col.symptoms !== undefined && r[col.symptoms]) m.symptoms = String(r[col.symptoms]).split(/[、,，;；]/).map((x) => SYMPTOM_BY_LABEL[x.trim()] || null).filter(Boolean);
+      if (exist.has(m.personId + '|' + m.at)) { dup++; continue; }
+      if (validateMeasurement(m).length) { invalid++; continue; }
+      exist.add(m.personId + '|' + m.at);
+      add.push(m);
+    }
+    add.sort((a, b) => new Date(a.at) - new Date(b.at));
+    const last = new Map();
+    for (const m of add) { db.measurements.push(m); const res = ingest(db, m.personId, m.at, slaOverride); if (res) last.set(m.personId, res.ev.overall); }
+    const levels = { red: 0, orange: 0, yellow: 0 };
+    for (const l of last.values()) if (l in levels) levels[l]++;
+    return { added: add.length, dup, bad, invalid, denied, unmatched: [...unmatched].map(maskId), levels };
+  }
+
   function maskId(id) { return id ? id.slice(0, 2) + '****' + id.slice(-4) : '—'; }
   function maskName(n) { if (!n) return ''; const a = [...n]; return a.length <= 2 ? a[0] + 'Ｏ' : a[0] + 'Ｏ'.repeat(a.length - 2) + a[a.length - 1]; }
 
@@ -1033,7 +1093,7 @@
   const Engine = {
     LEVELS, RANK, LEVEL_LABEL, LEVEL_MEANING, ITEMS, ITEM_LABEL, SYMPTOMS, SYMPTOM_BY_LABEL, ASSUMPTIONS, DEFAULT_SLA, CLOSE_REASONS,
     STATES, OPEN_STATES, STATE_LABEL, isOpen, recheckOverdue, SCHEMA, migrateWorkflow, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, DOWNGRADE_888, KEYS_888, cascade888,
-    LIFESTYLE, lifestylePrescription, RANGES, validateMeasurement, validateBackup, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
+    LIFESTYLE, lifestylePrescription, RANGES, validateMeasurement, validateBackup, mergeRoster, importMeasurementRows, IMPORT_ALIAS, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
     maxLevel, evaluateSession, groupSessions, ingest, act, nextStep, quality, wilson, prescription,
     parseRoster, parseBirth, validTwId, maskId, maskName, ageAt, addDays, sameDay, normGluType, uid,
   };

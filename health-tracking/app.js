@@ -30,7 +30,23 @@
   let vaultKey = null;
   let saving = Promise.resolve();
   const sensitive = () => db && !db.demo && db.persons.length > 0;
+  // ── 伺服器模式（院內主機）：資料、規則判定、稽核都在伺服器端；前端只呼叫 API
+  let SERVER = null; // { user, csrf }
+  async function api(pathname, body, opts = {}) {
+    const headers = { 'Content-Type': 'application/json', 'X-CHC-CSRF': SERVER ? SERVER.csrf : '' };
+    if (opts.poll) headers['X-CHC-Poll'] = '1';
+    const r = await fetch('api/' + pathname, { method: body === undefined ? 'GET' : 'POST', credentials: 'same-origin', headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    let j = {}; try { j = await r.json(); } catch (e) { /* 非 JSON */ }
+    if (r.status === 401) { loginScreen('連線逾時或已登出，請重新登入'); throw new Error('請重新登入'); }
+    if (j.mustChange) { changePasswordScreen(); throw new Error(j.error); }
+    if (!r.ok) throw new Error(j.error || '操作失敗');
+    if (j.data) db = j.data;
+    return j;
+  }
+  const srv = (promise, okMsg) => promise.then((j) => { render(); if (okMsg) toast(typeof okMsg === 'function' ? okMsg(j) : okMsg); return j; }).catch((e) => toast(e.message));
+
   function save() {
+    if (SERVER) return true;
     if (!db) return false;
     if (sensitive() && !vaultKey) { toast('含個資的資料必須先設定通行密語才能儲存'); requirePassphrase(); return false; }
     const snapshot = JSON.stringify(db);
@@ -45,7 +61,7 @@
   }
   // 稽核紀錄：敏感操作留痕（存在加密資料內）。注意：操作者為自選，正式上線需搭配院內帳號登入
   function audit(action, detail) {
-    if (!db || db.demo) return;
+    if (SERVER || !db || db.demo) return;
     db.audit = db.audit || [];
     db.audit.push({ at: nowISO(), user: ui.user || '', action, detail: detail || '' });
     if (db.audit.length > 5000) db.audit.splice(0, db.audit.length - 5000);
@@ -101,8 +117,9 @@
   // CSV：防公式注入（文字以 = + - @ 或定位字元開頭時前置 '，避免在 Excel 被當成公式執行）
   function csv(rows) { return '\ufeff' + rows.map((r) => r.map((c) => { let s = String(c ?? ''); if (typeof c !== 'number' && /^[=+\-@\t\r]/.test(s)) s = "'" + s; return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }).join(',')).join('\r\n'); }
   function exportCsv(name, rows, what) {
-    if (sensitive() && !confirm('匯出的檔案含個人資料且未加密。請只存放在院內核可的加密位置，用畢刪除。確定匯出？')) return;
-    audit('匯出', `${what || name}（${Math.max(0, rows.length - 1)} 列）`); save();
+    if ((SERVER || sensitive()) && !confirm('匯出的檔案含個人資料且未加密。請只存放在院內核可的加密位置，用畢刪除。確定匯出？')) return;
+    if (SERVER) api('export-log', { what: what || name, count: Math.max(0, rows.length - 1) }).catch(() => {});
+    else { audit('匯出', `${what || name}（${Math.max(0, rows.length - 1)} 列）`); save(); }
     download(name, csv(rows), 'text/csv');
   }
 
@@ -177,8 +194,10 @@
     const sites = [...new Set(db.persons.map((p) => p.site))].sort();
     if (ui.site !== 'all' && !sites.includes(ui.site)) ui.site = 'all';
     $('#site-filter').innerHTML = `<option value="all">全部據點</option>` + sites.map((s) => `<option ${s === ui.site ? 'selected' : ''}>${esc(s)}</option>`).join('');
-    const ns = nurses(); if (!ns.includes(ui.user)) ui.user = ns[0];
-    $('#lock-btn').hidden = !vaultKey;
+    if (SERVER) { ui.user = SERVER.user.name; $('#user-sel').innerHTML = `<option>${esc(SERVER.user.name)}</option>`; $('#user-sel').disabled = true; }
+    const ns = nurses(); if (!SERVER && !ns.includes(ui.user)) ui.user = ns[0];
+    $('#lock-btn').hidden = !vaultKey && !SERVER;
+    $('#lock-btn').textContent = SERVER ? '登出' : '🔒 鎖定';
     $('#user-sel').innerHTML = ns.map((n) => `<option ${n === ui.user ? 'selected' : ''}>${esc(n)}</option>`).join('');
     const route = (location.hash.slice(2) || 'dashboard').split('/')[0];
     const now = new Date();
@@ -187,16 +206,18 @@
   }
 
   function render() {
+    if (!db) return; // 登入或解鎖畫面時沒有資料，不渲染
     index(); shell();
     const [route, arg] = (location.hash.slice(2) || 'dashboard').split('/');
     const app = $('#app');
-    const stale = !db.demo && db.episodes.some(E.isOpen) && db.rulesVersion !== E.RULES_VERSION
+    const stale = !db.demo && (!SERVER || SERVER.user.role === 'admin') && db.episodes.some(E.isOpen) && db.rulesVersion !== E.RULES_VERSION
       ? `<div class="banner no-print row spread"><span>分層規則已更新（${E.RULES_VERSION}）。開放中的追蹤案仍是依開案當時的規則判定，可能與目前畫面上的項目層級不一致。</span><button class="btn sm primary" type="button" id="regrade-btn">依新規則重新判定</button></div>` : '';
     const banner = stale + (db.demo ? `<div class="banner no-print">目前顯示的是<strong>虛構示範資料</strong>（${db.persons.length} 位合成民眾），用來展示分層與閉環流程。正式使用請到「資料匯入」清除示範資料並匯入名冊。</div>` : '');
     const views = { dashboard, worklist, residents, p: caseView, quality: qualityView, 888: view888, import: importView, rules: rulesView };
     app.innerHTML = banner + (views[route] || dashboard)(arg);
     const rg = $('#regrade-btn');
-    if (rg) rg.onclick = () => {
+    if (rg && SERVER) rg.onclick = () => { if (confirm('依目前規則重新判定所有進行中的追蹤輪次？')) srv(api('regrade', {}), (j) => `已重新判定：${j.changes} 案層級改變`); };
+    else if (rg) rg.onclick = () => {
       if (!confirm('依目前規則，以每人最近一次量測重新判定所有開放中的追蹤案？變動會寫入各案的處理紀錄。')) return;
       const ch = E.regradeOpen(db, nowISO(), sla(), ui.user); audit('依新規則重新判定', `${ch.length} 案`); save(); render();
       const up = ch.filter((c) => E.RANK[c.to] > E.RANK[c.from]).length, down = ch.length - up;
@@ -441,7 +462,7 @@
         <div><h3>下一步：${esc(s.label)}</h3><div class="small">${dueText(s)}</div></div>
         <div class="tbl-wrap"><table class="small"><thead><tr><th>步驟</th><th>期限</th><th>完成</th></tr></thead><tbody>${dueRows.map(([n, d, done]) => `<tr><td>${n}</td><td class="tnum">${d ? fmtD(d) : '—'}</td><td class="tnum">${done ? '✓ ' + fmtD(done) : (d && new Date(d) < now ? '<span class="overdue">逾期</span>' : '—')}</td></tr>`).join('')}</tbody></table></div>
       </div>
-      <form id="ep-form" class="no-print" style="margin-top:12px" onsubmit="return false">${form}</form>
+      <form id="ep-form" class="no-print" style="margin-top:12px">${form}</form>
       <details class="no-print" style="margin-top:12px"><summary class="small">結案（轉由醫師持續管理、死亡、遷出、失聯、拒絕）</summary>
         <div class="row" style="margin-top:8px"><select id="close-reason">${['已轉由醫師持續管理', '失聯', '拒絕', '遷出', '死亡'].map((r) => `<option>${r}</option>`).join('')}</select><input type="date" id="close-followup" title="轉由醫師管理時填回診日期"><input type="text" id="close-note" placeholder="說明（如：3 次電訪未接）"><button class="btn danger" type="button" id="close-btn">結案</button></div>
       </details>
@@ -473,6 +494,7 @@
       if (Object.keys(m).length <= 5 && !m.arr) throw new Error('請至少輸入一項數值');
       const bad = E.validateMeasurement(m); if (bad.length) throw new Error(bad.join('；'));
       if ((m.sbp === undefined) !== (m.dbp === undefined)) throw new Error('血壓請同時輸入收縮壓與舒張壓');
+      if (SERVER) { srv(api(`persons/${p.id}/measurements`, { m }), (j) => `已判定：${E.LEVEL_LABEL[j.overall]}層${j.emergency ? '，有警示症狀請立即處理' : ''}`); return; }
       db.measurements.push(m);
       const r = E.ingest(db, p.id, m.at, sla());
       save(); render();
@@ -559,7 +581,6 @@
 
   // ───────────── 資料匯入 ─────────────
   const M_COLS = [['識別值', 'id'], ['量測時間', 'at'], ['收縮壓', 'sbp'], ['舒張壓', 'dbp'], ['脈搏', 'pulse'], ['心律旗標', 'arr'], ['血氧', 'spo2'], ['體溫', 'temp'], ['血糖', 'glucose'], ['血糖類型', 'glucoseType'], ['LDL', 'ldl'], ['三酸甘油脂', 'tg'], ['HDL', 'hdl'], ['總膽固醇', 'tc'], ['尿酸', 'ua'], ['體重', 'weight'], ['腰圍', 'waist'], ['體脂率', 'bodyFat'], ['症狀', 'symptoms']];
-  const ALIAS = { id: ['識別值', '身分證', '證號', '個案編號', 'id'], at: ['量測時間', '時間', '日期'], sbp: ['收縮壓', 'sbp'], dbp: ['舒張壓', 'dbp'], pulse: ['脈搏', '心率', 'pulse', 'hr'], arr: ['心律', 'arr', '房顫'], spo2: ['血氧', 'spo2'], temp: ['體溫', 'temp'], glucoseType: ['血糖類型', '血糖種類'], glucose: ['血糖', 'glucose'], ldl: ['ldl', '低密度'], tg: ['三酸甘油', 'tg'], hdl: ['hdl', '高密度'], tc: ['總膽固醇', 'tc'], ua: ['尿酸', 'ua'], weight: ['體重', 'weight'], waist: ['腰圍', 'waist'], bodyFat: ['體脂', 'fat'], symptoms: ['症狀'] };
   let pendingRoster = null;
 
   function importView() {
@@ -577,11 +598,11 @@
         <details class="small" style="margin-top:8px"><summary>欄位說明</summary><p>${M_COLS.map(([c]) => c).join('、')}。<br>血糖類型填「空腹／飯後／隨機」；心律旗標填 Y；症狀以「、」分隔，可用：${Object.values(E.SYMPTOMS).map((s) => s.replace(/（.*）/, '')).join('、')}。<br>正式串接時建議由 App 後端以 API 即時推送同樣欄位，而非人工匯檔。</p></details>
       </div>
     </div>
-    <div class="card" style="margin-top:12px"><h2>備份與重設</h2>
+    ${SERVER ? `<div class="card" style="margin-top:12px"><h2>資料存放</h2><p class="small">資料集中存放在院內主機（加密），由伺服器每日自動備份；匯入、操作都會記錄在伺服器端稽核紀錄。</p></div>` : `<div class="card" style="margin-top:12px"><h2>備份與重設</h2>
       <p class="small">資料目前只存在<strong>這台電腦的這個瀏覽器</strong>。請定期匯出備份；正式上線需改接院內資料庫（見說明文件）。</p>
       <div class="row"><button class="btn" id="bk-exp" type="button">匯出備份（JSON）</button><label class="btn">匯入備份<input type="file" id="bk-imp" accept=".json" hidden></label>
       <button class="btn" id="demo-load" type="button">重新載入示範資料</button><button class="btn danger" id="wipe" type="button">清除全部資料</button></div>
-    </div>`;
+    </div>`}`;
   }
 
   // 不依賴第三方程式庫的 xlsx／csv 讀取器（xlsx-reader.js），離線可用
@@ -608,54 +629,73 @@
   function commitRoster(newKey) {
     if (!pendingRoster) return;
     if (db.demo) { db = { persons: [], measurements: [], episodes: [], settings: db.settings, rulesVersion: E.RULES_VERSION, schema: E.SCHEMA }; }
-    const byId = new Map(db.persons.filter((p) => p.nationalId).map((p) => [p.nationalId, p]));
-    let add = 0, upd = 0;
-    for (const r of pendingRoster.all) {
-      const ex = r.nationalId && byId.get(r.nationalId);
-      if (ex) { Object.assign(ex, { name: r.name, sex: r.sex || ex.sex, birth: r.birth || ex.birth, heightCm: r.heightCm ?? ex.heightCm, phone: r.phone || ex.phone, site: r.site }); upd++; continue; }
-      const p = { id: E.uid('p'), name: r.name, sex: r.sex, birth: r.birth, heightCm: r.heightCm, nationalId: r.nationalId, phone: r.phone, site: r.site };
-      db.persons.push(p); if (p.nationalId) byId.set(p.nationalId, p); add++;
-    }
+    const { add, upd } = E.mergeRoster(db, pendingRoster.all);
     if (newKey) audit('設定通行密語', '匯入名冊前設定，資料開始加密');
     audit('匯入名冊', `新增 ${add} 位、更新 ${upd} 位`);
     pendingRoster = null; save(); render(); toast(`已新增 ${add} 位、更新 ${upd} 位`);
   }
 
+  function showImportResult(r) {
+    $('#meas-preview').innerHTML = `<p class="small">已匯入 <strong>${r.added}</strong> 筆（重複略過 ${r.dup}、時間無法解析 ${r.bad}、數值超出合理範圍 ${r.invalid}${r.denied ? `、無權限 ${r.denied}` : ''}、找不到民眾 ${r.unmatched.length} 人）。本次最新判定異常：紅 ${r.levels.red}、橙 ${r.levels.orange}、黃 ${r.levels.yellow} 人。</p>${r.unmatched.length ? `<p class="small muted">找不到的識別值：${r.unmatched.slice(0, 20).map(esc).join('、')}${r.unmatched.length > 20 ? '…' : ''}</p>` : ''}`;
+  }
   function importMeasurements(rows) {
-    const head = rows[0].map((h) => String(h).trim().toLowerCase());
-    const col = {};
-    for (const [k, al] of Object.entries(ALIAS)) {
-      const i = head.findIndex((h, j) => al.some((a) => h.includes(a.toLowerCase())) && !Object.values(col).includes(j) && !(k === 'glucose' && h.includes('類')));
-      if (i >= 0) col[k] = i;
-    }
-    if (col.id === undefined || col.at === undefined) throw new Error('找不到「識別值」或「量測時間」欄位');
-    const key = new Map();
-    for (const p of db.persons) { if (p.nationalId) key.set(p.nationalId, p); if (p.demoId) key.set(p.demoId, p); }
-    const exist = new Set(db.measurements.map((m) => m.personId + '|' + m.at));
-    const unmatched = new Set(); let bad = 0, dup = 0, invalid = 0; const add = [];
-    for (const r of rows.slice(1)) {
-      if (!r || r.every((c) => c === '' || c === null)) continue;
-      const p = key.get(String(r[col.id]).trim().toUpperCase());
-      if (!p) { unmatched.add(String(r[col.id])); continue; }
-      const t = r[col.at] instanceof Date ? r[col.at] : new Date(String(r[col.at]).replace(/\//g, '-').replace(' ', 'T'));
-      if (isNaN(t)) { bad++; continue; }
-      const m = { id: E.uid('m'), personId: p.id, at: t.toISOString(), source: 'import' };
-      for (const k of ['sbp', 'dbp', 'pulse', 'spo2', 'temp', 'glucose', 'ldl', 'tg', 'hdl', 'tc', 'ua', 'weight', 'waist', 'bodyFat']) if (col[k] !== undefined && r[col[k]] !== '' && r[col[k]] !== null && !isNaN(+r[col[k]])) m[k] = +r[col[k]];
-      if (col.arr !== undefined && /^(y|yes|1|是|true|arr)/i.test(String(r[col.arr]))) m.arr = true;
-      if (col.glucoseType !== undefined && m.glucose !== undefined) m.glucoseType = String(r[col.glucoseType] || '隨機');
-      if (col.symptoms !== undefined && r[col.symptoms]) m.symptoms = String(r[col.symptoms]).split(/[、,，;；]/).map((s) => E.SYMPTOM_BY_LABEL[s.trim()] || null).filter(Boolean);
-      if (exist.has(m.personId + '|' + m.at)) { dup++; continue; }
-      if (E.validateMeasurement(m).length) { invalid++; continue; }
-      add.push(m);
-    }
-    add.sort((a, b) => new Date(a.at) - new Date(b.at));
-    const last = new Map();
-    for (const m of add) { db.measurements.push(m); const r = E.ingest(db, m.personId, m.at, sla()); if (r) last.set(m.personId, r.ev.overall); }
-    const lv = { red: 0, orange: 0, yellow: 0 };
-    for (const l of last.values()) if (l in lv) lv[l]++;
-    audit('匯入量測', `${add.length} 筆`);
-    save(); render();
-    $('#meas-preview').innerHTML = `<p class="small">已匯入 <strong>${add.length}</strong> 筆（重複略過 ${dup}、時間無法解析 ${bad}、數值超出合理範圍 ${invalid}、找不到民眾 ${unmatched.size} 人）。本次最新判定異常：紅 ${lv.red}、橙 ${lv.orange}、黃 ${lv.yellow} 人。</p>${unmatched.size ? `<p class="small muted">找不到的識別值：${[...unmatched].slice(0, 20).map((x) => esc(E.maskId(x))).join('、')}${unmatched.size > 20 ? '…' : ''}</p>` : ''}`;
+    const r = E.importMeasurementRows(db, rows, sla());
+    audit('匯入量測', `${r.added} 筆`);
+    save(); render(); showImportResult(r);
+  }
+
+  // ───────────── 伺服器模式：帳號與稽核 ─────────────
+  let usersCache = null, auditCache = null;
+  function serverSecurityCard() {
+    const u = SERVER.user, admin = u.role === 'admin';
+    const sites = db.sites || [];
+    const userRows = (usersCache || []).map((x) => `<tr><td>${esc(x.username)}</td><td>${esc(x.name)}</td><td>${x.role === 'admin' ? '管理者' : '社區護理師'}</td><td class="small">${x.sites.includes('*') ? '全部據點' : esc(x.sites.join('、')) || '<span class="overdue">未指定</span>'}</td><td>${x.disabled ? '<span class="overdue">停用</span>' : x.mustChange ? '待改密碼' : '啟用'}</td>
+      <td class="row"><button class="btn sm" type="button" data-uedit="${esc(x.username)}">編輯</button><button class="btn sm" type="button" data-ureset="${esc(x.username)}">重設密碼</button><button class="btn sm ${x.disabled ? '' : 'danger'}" type="button" data-udis="${esc(x.username)}" data-v="${x.disabled ? 0 : 1}">${x.disabled ? '啟用' : '停用'}</button></td></tr>`).join('');
+    return `<div class="card" style="margin-top:12px"><h2>帳號與資訊安全</h2>
+      <div class="small" style="display:grid;grid-template-columns:auto 1fr;gap:4px 12px">
+        <span class="muted">登入身分</span><span>${esc(u.name)}（${esc(u.username)}）・${admin ? '管理者' : '社區護理師'}・可見據點：${u.sites.includes('*') ? '全部' : esc(u.sites.join('、'))}</span>
+        <span class="muted">資料保護</span><span>資料集中於院內主機，以 AES-256-GCM 加密存放；身分證號預設遮蔽，調閱完整號碼會記錄稽核</span>
+        <span class="muted">工作階段</span><span>閒置自動登出；同一帳號變更密碼時，其他裝置會被登出</span>
+      </div>
+      <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="my-pass">變更我的密碼</button></div>
+      ${admin ? `<h3 style="margin-top:14px">帳號管理</h3>
+        ${usersCache ? `<div class="tbl-wrap"><table class="small"><thead><tr><th>帳號</th><th>姓名</th><th>角色</th><th>可見據點</th><th>狀態</th><th></th></tr></thead><tbody>${userRows}</tbody></table></div>` : '<p class="small muted">載入中…</p>'}
+        <div class="row" style="margin-top:8px"><button class="btn sm primary" type="button" id="u-add">新增帳號</button></div>
+        <h3 style="margin-top:14px">伺服器稽核紀錄</h3>
+        <div class="row"><button class="btn sm" type="button" id="audit-load">載入最近 500 筆</button>${auditCache ? `<span class="small ${auditCache.integrity.ok ? '' : 'overdue'}">${auditCache.integrity.ok ? `✓ 雜湊鏈完整（共 ${auditCache.integrity.count} 筆）` : `⚠ 第 ${auditCache.integrity.brokenAt} 筆之後遭修改或刪除`}</span><button class="btn sm" type="button" id="audit-exp2">匯出</button>` : ''}</div>
+        ${auditCache ? `<div class="tbl-wrap" style="margin-top:6px;max-height:360px;overflow:auto"><table class="small"><thead><tr><th>#</th><th>時間</th><th>帳號</th><th>來源 IP</th><th>動作</th><th>對象</th><th>內容</th></tr></thead><tbody>${auditCache.entries.map((a) => `<tr><td class="tnum">${a.seq}</td><td class="tnum">${fmtDT(a.at)}</td><td>${esc(a.user)}</td><td class="tnum">${esc(a.ip)}</td><td>${esc(a.action)}</td><td>${esc(a.target)}</td><td>${esc(a.detail)}</td></tr>`).join('')}</tbody></table></div>` : ''}` : ''}
+      <p class="small muted">${esc(sites.length ? '' : '')}</p></div>`;
+  }
+  function userDialog(x) {
+    const sites = db.sites || [];
+    const has = (s) => x && x.sites.includes(s);
+    dialog(x ? `編輯帳號：${x.username}` : '新增帳號', `<div class="form-grid">
+      <label class="f">帳號（英數字）<input type="text" name="username" value="${esc(x ? x.username : '')}" ${x ? 'readonly' : ''} autocapitalize="none" spellcheck="false"></label>
+      <label class="f">姓名<input type="text" name="name" value="${esc(x ? x.name : '')}"></label>
+      <label class="f">角色<select name="role"><option value="nurse" ${x && x.role === 'nurse' ? 'selected' : ''}>社區護理師</option><option value="admin" ${x && x.role === 'admin' ? 'selected' : ''}>管理者</option></select></label></div>
+      <h3 style="margin-top:12px">可見據點</h3><div class="chips"><label class="chip"><input type="checkbox" name="site" value="*" ${has('*') ? 'checked' : ''} style="margin-right:4px">全部據點</label>${sites.map((s) => `<label class="chip"><input type="checkbox" name="site" value="${esc(s)}" ${has(s) ? 'checked' : ''} style="margin-right:4px">${esc(s)}</label>`).join('')}</div>
+      <p class="small muted">${sites.length ? '' : '尚未匯入名冊，據點清單為空；可先勾選「全部據點」，匯入名冊後再調整。'}新增帳號會產生一組臨時密碼，只顯示一次，請當面或以院內管道交給本人；首次登入須自行變更。</p>`,
+    [{ label: '取消' }, { label: '儲存', primary: true, onClick: () => {
+      const fd = new FormData($('#dlg-form'));
+      const body = { username: fd.get('username'), name: fd.get('name'), role: fd.get('role'), sites: fd.getAll('site') };
+      api('users', body).then(showTempPassword).catch((e) => toast(e.message));
+    } }]);
+  }
+  function showTempPassword(j) {
+    usersCache = j.users; render();
+    if (j.tempPassword) dialog('臨時密碼（只顯示這一次）', `<p>請交給本人，首次登入須變更：</p><p style="font-size:22px;font-weight:700;letter-spacing:.05em" class="tnum">${esc(j.tempPassword)}</p>`, [{ label: '我已記下', primary: true }]);
+    else toast('已更新帳號');
+  }
+  function bindServerSecurity() {
+    $('#my-pass').onclick = () => changePasswordScreen();
+    if (SERVER.user.role !== 'admin') return;
+    if (!usersCache) api('users').then((j) => { usersCache = j.users; render(); }).catch((e) => toast(e.message));
+    $('#u-add').onclick = () => userDialog(null);
+    $$('[data-uedit]').forEach((b) => (b.onclick = () => userDialog(usersCache.find((x) => x.username === b.dataset.uedit))));
+    $$('[data-ureset]').forEach((b) => (b.onclick = () => { if (confirm(`重設 ${b.dataset.ureset} 的密碼？對方會被登出，需用臨時密碼重新登入。`)) api('users', { username: b.dataset.ureset, resetPassword: true }).then(showTempPassword).catch((e) => toast(e.message)); }));
+    $$('[data-udis]').forEach((b) => (b.onclick = () => api('users', { username: b.dataset.udis, disabled: b.dataset.v === '1' }).then(showTempPassword).catch((e) => toast(e.message))));
+    $('#audit-load').onclick = () => api('audit').then((j) => { auditCache = j; render(); }).catch((e) => toast(e.message));
+    const ae = $('#audit-exp2'); if (ae) ae.onclick = () => exportCsv('伺服器稽核紀錄.csv', [['序號', '時間', '帳號', '來源IP', '動作', '對象', '內容', '雜湊'], ...auditCache.entries.map((a) => [a.seq, a.at, a.user, a.ip, a.action, a.target, a.detail, a.hash])], '伺服器稽核紀錄');
   }
 
   // ───────────── 規則與設定 ─────────────
@@ -688,7 +728,7 @@
       <li>複測日已過未回站者，列入「待回站複測」，請通知民眾回站。</li>
       <li>結案原因限於：已轉由醫師持續管理（需登記回診日期）、死亡、遷出、失聯、拒絕。</li></ul></div>
     <div class="card" style="margin-top:12px"><h2>系統解讀（請臨床委員會確認）</h2><ol class="small">${E.ASSUMPTIONS.map((a) => `<li>${esc(a)}</li>`).join('')}</ol></div>
-    <div class="card" style="margin-top:12px"><h2>資訊安全</h2>
+    ${SERVER ? serverSecurityCard() : `<div class="card" style="margin-top:12px"><h2>資訊安全</h2>
       <div class="small" style="display:grid;grid-template-columns:auto 1fr;gap:4px 12px">
         <span class="muted">資料保護</span><span>${db.demo ? '示範資料（虛構，未加密）' : vaultKey ? `✓ 已加密：AES-256-GCM，金鑰由通行密語經 PBKDF2-SHA256 ${window.Vault.ITER.toLocaleString()} 次衍生` : '<span class="overdue">未加密</span>'}</span>
         <span class="muted">自動鎖定</span><span>閒置 ${IDLE_MIN} 分鐘；輸入錯誤 3 次後延遲重試</span>
@@ -697,7 +737,7 @@
       </div>
       ${vaultKey ? '<div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="chg-pass">變更通行密語</button><button class="btn sm" type="button" id="audit-exp">匯出稽核紀錄</button></div>' : ''}
       ${(db.audit || []).length ? `<details style="margin-top:8px"><summary class="small">最近 100 筆稽核紀錄</summary><div class="tbl-wrap"><table class="small"><thead><tr><th>時間</th><th>操作者</th><th>動作</th><th>內容</th></tr></thead><tbody>${db.audit.slice(-100).reverse().map((a) => `<tr><td class="tnum">${fmtDT(a.at)}</td><td>${esc(a.user)}</td><td>${esc(a.action)}</td><td>${esc(a.detail)}</td></tr>`).join('')}</tbody></table></div></details>` : ''}
-      <p class="small muted">「操作者」目前為自行選擇，稽核紀錄存在本機加密資料內，無法防止有密語者竄改。正式上線需改接院內帳號登入與伺服器端稽核（見 README「正式上線前必須處理」）。</p></div>
+      <p class="small muted">「操作者」目前為自行選擇，稽核紀錄存在本機加密資料內，無法防止有密語者竄改。多人共用請改用院內主機版（見 server/DEPLOY.md）。</p></div>`}
     <div class="card" style="margin-top:12px"><h2>健康888 定義</h2>
       <div class="form-grid">
         <label class="f">觀察期（天，0 為全部）<input type="number" min="0" data-t888="lookbackDays" value="${t8.lookbackDays}"></label>
@@ -713,8 +753,8 @@
         <tr><td>複測</td><td>就醫後 ${num('phoneAfterVisit', s.phoneAfterVisit)} 天電訪</td><td>${num('retest.orange', s.retest.orange)}</td><td>${num('retest.yellow', s.retest.yellow)}</td></tr>
       </tbody></table></div>
       <p class="small muted">0 表示當日。修改只影響之後新開或重新判定的追蹤案。</p>
-      <label class="f" style="margin-top:8px">社區護理師名單（以逗號分隔）<input type="text" id="nurses" value="${esc(nurses().join('，'))}"></label>
-      <div class="row" style="margin-top:8px"><button class="btn primary" id="save-set" type="button">儲存設定</button><label class="row small"><input type="checkbox" id="mask" ${ui.mask ? 'checked' : ''}>畫面遮蔽姓名（簡報／螢幕分享用）</label></div>
+      ${SERVER ? '<p class="small muted">社區護理師名單由「帳號管理」決定。' + (SERVER.user.role === 'admin' ? '' : '處理時限與健康888 定義只有管理者可以修改。') + '</p>' : `<label class="f" style="margin-top:8px">社區護理師名單（以逗號分隔）<input type="text" id="nurses" value="${esc(nurses().join('，'))}"></label>`}
+      <div class="row" style="margin-top:8px"><button class="btn primary" id="save-set" type="button" ${SERVER && SERVER.user.role !== 'admin' ? 'disabled' : ''}>儲存設定</button><label class="row small"><input type="checkbox" id="mask" ${ui.mask ? 'checked' : ''}>畫面遮蔽姓名（簡報／螢幕分享用）</label></div>
     </div>`;
   }
 
@@ -757,7 +797,7 @@
         const st = lockState(), wait = Math.max(0, Math.ceil((st.until - Date.now()) / 1000));
         $('#app').innerHTML = `<div class="card" style="max-width:440px;margin:40px auto">
           <h1>資料已加密鎖定</h1><p class="small">請輸入通行密語。閒置 ${IDLE_MIN} 分鐘會自動鎖定。</p>
-          <form id="unlock-form" onsubmit="return false"><label class="f">通行密語<input type="password" id="unlock-p" autocomplete="current-password" ${wait ? 'disabled' : ''} autofocus></label>
+          <form id="unlock-form"><label class="f">通行密語<input type="password" id="unlock-p" autocomplete="current-password" ${wait ? 'disabled' : ''} autofocus></label>
           <div class="row" style="margin-top:10px"><button class="btn primary" id="unlock-btn" ${wait ? 'disabled' : ''}>解鎖</button></div></form>
           ${msg ? `<p class="small overdue">${esc(msg)}</p>` : ''}${wait ? `<p class="small overdue">多次輸入錯誤，請 ${wait} 秒後再試。</p>` : ''}
           <details class="small" style="margin-top:16px"><summary>忘記通行密語</summary><p>無法還原（沒有後門）。只能清除這台電腦上的加密資料，再從加密備份或原始名冊重新匯入。</p><button class="btn danger sm" type="button" id="forget-btn">清除本機加密資料</button></details></div>`;
@@ -798,7 +838,70 @@
   }
   ['mousemove', 'keydown', 'click', 'touchstart', 'scroll'].forEach((ev) => document.addEventListener(ev, () => { if (vaultKey) armIdle(); }, { passive: true, capture: true }));
 
+  // ───────────── 伺服器模式：登入與啟動 ─────────────
+  async function detectServer() {
+    try {
+      const r = await fetch('api/me', { credentials: 'same-origin' });
+      if (r.status !== 200 && r.status !== 401) return null;
+      const j = await r.json();
+      return j && j.mode === 'server' ? j : null;
+    } catch (e) { return null; } // 直接開檔、靜態主機、claude.ai 連結：單機模式
+  }
+  function bareScreen(html) { $('#tabs').innerHTML = ''; $('.top-tools').hidden = true; $('#app').innerHTML = `<div class="card" style="max-width:440px;margin:40px auto">${html}</div>`; }
+  function loginScreen(msg) {
+    SERVER = null; db = null; clearInterval(pollTimer);
+    bareScreen(`<h1>社區健康站追蹤後台</h1><p class="small">請以院內核發的帳號登入。閒置一段時間會自動登出。</p>
+      <form id="login-form"><label class="f">帳號<input type="text" id="lg-u" autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+      <label class="f" style="margin-top:8px">密碼<input type="password" id="lg-p" autocomplete="current-password"></label>
+      <div class="row" style="margin-top:10px"><button class="btn primary" id="lg-btn">登入</button></div></form>
+      ${msg ? `<p class="small overdue">${esc(msg)}</p>` : ''}`);
+    $('#lg-u').focus();
+    $('#lg-btn').onclick = async () => {
+      const b = $('#lg-btn'); b.disabled = true; b.textContent = '登入中…';
+      try {
+        const r = await fetch('api/login', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: $('#lg-u').value, password: $('#lg-p').value }) });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || '登入失敗');
+        SERVER = { user: j.user, csrf: j.csrf };
+        if (j.user.mustChange) changePasswordScreen(); else enterServerApp();
+      } catch (e) { loginScreen(e.message); }
+    };
+  }
+  function changePasswordScreen() {
+    bareScreen(`<h1>請變更密碼</h1><p class="small">首次登入或密碼已被重設，請設定新密碼（至少 12 個字元，建議用一句好記的話）。</p>
+      <form><label class="f">目前密碼<input type="password" id="cp-0" autocomplete="current-password"></label>
+      <label class="f" style="margin-top:8px">新密碼<input type="password" id="cp-1" autocomplete="new-password"></label>
+      <label class="f" style="margin-top:8px">再輸入一次<input type="password" id="cp-2" autocomplete="new-password"></label>
+      <div class="row" style="margin-top:10px"><button class="btn primary" id="cp-btn">變更密碼</button></div></form><p class="small overdue" id="cp-msg"></p>`);
+    $('#cp-btn').onclick = async () => {
+      try {
+        if ($('#cp-1').value !== $('#cp-2').value) throw new Error('兩次輸入不一致');
+        const j = await api('password', { current: $('#cp-0').value, next: $('#cp-1').value });
+        SERVER.user = j.user; enterServerApp();
+      } catch (e) { $('#cp-msg').textContent = e.message; }
+    };
+  }
+  let pollTimer = null;
+  async function enterServerApp() {
+    await api('data');
+    $('.top-tools').hidden = false;
+    ui.site = 'all';
+    render();
+    // 每分鐘更新一次，讓多位護理師看到彼此的處理進度；正在輸入或開著對話框時不打斷
+    clearInterval(pollTimer);
+    pollTimer = setInterval(() => {
+      const busy = $('#dlg').open || (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName));
+      if (!busy) api('data', undefined, { poll: true }).then(() => render()).catch(() => {});
+    }, 60000);
+  }
+
   async function boot() {
+    const me = await detectServer();
+    if (me) {
+      if (!me.user) return loginScreen();
+      SERVER = { user: me.user, csrf: me.csrf };
+      return me.user.mustChange ? changePasswordScreen() : enterServerApp();
+    }
     const raw = load();
     if (raw && window.Vault.isEnvelope(raw)) await unlockScreen(raw);
     else db = raw;
@@ -847,14 +950,15 @@
       const ep = IX.open.get(id);
       $('#add-m').onclick = () => measurementDialog(p);
       const a2 = $('#add-m2'); if (a2) a2.onclick = () => measurementDialog(p);
-      const sn = $('#show-nid'); if (sn) sn.onclick = () => { $('#nid').textContent = p.nationalId; sn.remove(); audit('查看完整身分證號', `${p.name}（${p.id}）`); save(); };
-      $$('[data-flag]').forEach((c) => (c.onchange = () => { p[c.dataset.flag] = c.checked; save(); render(); toast('已更新風險註記；下次量測起依新註記判定'); }));
+      const sn = $('#show-nid'); if (sn) sn.onclick = () => { if (SERVER) { api(`persons/${p.id}/reveal`, {}).then((j) => { $('#nid').textContent = j.nationalId; sn.remove(); }).catch((e) => toast(e.message)); return; } $('#nid').textContent = p.nationalId; sn.remove(); audit('查看完整身分證號', `${p.name}（${p.id}）`); save(); };
+      $$('[data-flag]').forEach((c) => (c.onchange = () => { if (SERVER) { srv(api(`persons/${p.id}/flags`, { patch: { [c.dataset.flag]: c.checked } }), '已更新風險註記；下次量測起依新註記判定'); return; } p[c.dataset.flag] = c.checked; save(); render(); toast('已更新風險註記；下次量測起依新註記判定'); }));
       const lr = $('#life-rx'); if (lr) lr.onclick = () => { const l = IX.latest(p.id); printRx(p, null, E.lifestylePrescription(p, l.ev)); };
-      const sb = $('#spo2-base'); if (sb) sb.onchange = () => { p.spo2Baseline = sb.value === '' ? null : +sb.value; save(); };
+      const sb = $('#spo2-base'); if (sb) sb.onchange = () => { if (SERVER) { srv(api(`persons/${p.id}/flags`, { patch: { spo2Baseline: sb.value === '' ? null : +sb.value } })); return; } p.spo2Baseline = sb.value === '' ? null : +sb.value; save(); };
       $$('[data-print-rx]').forEach((b) => (b.onclick = (e) => { e.preventDefault(); const ta = $('#ep-form textarea[name=rx]'); printRx(p, ta ? Object.assign({}, ep, { rx: { text: ta.value } }) : ep); }));
       if (!ep) return;
       $$('[data-act]').forEach((b) => (b.onclick = () => {
         const fd = new FormData($('#ep-form')); const payload = Object.fromEntries(fd.entries());
+        if (SERVER) { srv(api(`episodes/${ep.id}/act`, { action: b.dataset.act, payload }), () => `已記錄：${E.STATE_LABEL[(db.episodes.find((x) => x.id === ep.id) || {}).state] || '完成'}`); return; }
         try {
           E.act(db, ep.id, b.dataset.act, payload, nowISO(), ui.user, sla());
           save(); render(); toast(`已記錄：${E.STATE_LABEL[db.episodes.find((x) => x.id === ep.id).state]}`);
@@ -863,6 +967,7 @@
       $('#close-btn').onclick = () => {
         const reason = $('#close-reason').value;
         if (!confirm(`確定以「${reason}」結案？`)) return;
+        if (SERVER) { srv(api(`episodes/${ep.id}/act`, { action: 'close', payload: { reason, note: $('#close-note').value, followupDate: $('#close-followup').value } }), '已結案'); return; }
         try { E.act(db, ep.id, 'close', { reason, note: $('#close-note').value, followupDate: $('#close-followup').value }, nowISO(), ui.user, sla()); audit('結案', `${p.name}：${reason}`); save(); render(); toast('已結案'); } catch (err) { toast(err.message); }
       };
     },
@@ -883,6 +988,7 @@
     import() {
       $('#roster-file').onchange = (e) => { const f = e.target.files[0]; if (f) readWorkbook(f).then(previewRoster).then(() => {
         $('#roster-go').onclick = async () => {
+          if (SERVER) { srv(api('roster', { persons: pendingRoster.all }), (j) => { pendingRoster = null; return `已新增 ${j.result.add} 位、更新 ${j.result.upd} 位${j.result.denied ? `；${j.result.denied} 位不在你負責的據點，未匯入` : ''}`; }); return; }
           if (db.demo && !confirm('匯入正式名冊會清除示範資料，確定？')) return;
           const fresh = !vaultKey;
           if (fresh && !(await passphraseDialog('設定通行密語', '名冊含姓名、身分證號與電話，匯入前必須設定通行密語加密。'))) return;
@@ -890,8 +996,9 @@
         };
         $('#roster-issues').onclick = () => exportCsv('名冊問題清單.csv', [['工作表', '列', '姓名', '問題'], ...pendingRoster.issues.map((i) => [i.sheet, i.row, i.name, i.issues.join('；')])], '名冊問題清單');
       }).catch((err) => toast(err.message)); };
-      $('#meas-file').onchange = (e) => { const f = e.target.files[0]; if (!f) return; readWorkbook(f).then((wb) => importMeasurements(wb.rows.get(wb.SheetNames[0]))).catch((err) => toast(err.message)); };
+      $('#meas-file').onchange = (e) => { const f = e.target.files[0]; if (!f) return; readWorkbook(f).then((wb) => { const rows = wb.rows.get(wb.SheetNames[0]); if (!SERVER) return importMeasurements(rows); return api('measurements/import', { rows }).then((j) => { render(); showImportResult(j.result); }); }).catch((err) => toast(err.message)); };
       $('#tpl').onclick = () => download('量測匯入範本.csv', csv([M_COLS.map((c) => c[0]), [db.persons[0] ? (db.persons[0].demoId || '請填身分證號') : 'A123456789', '2026-10-30 09:15', 138, 86, 78, '', 96, 36.5, 112, '空腹', 135, 160, 48, '', '', 62.5, 86, 31.2, '']]), 'text/csv');
+      if (SERVER) return;
       // 備份：正式資料一律加密匯出（用目前的通行密語）；示範資料為明文
       $('#bk-exp').onclick = async () => {
         const name = `健康站追蹤備份_${fmtD(nowISO()).replace(/\//g, '')}${sensitive() ? '_加密' : ''}.json`;
@@ -938,10 +1045,12 @@
         $$('[data-sla]').forEach((i) => { const [a, b] = i.dataset.sla.split('.'); const v = i.value === '' ? null : Math.max(0, +i.value); if (b) s[a][b] = v; else s[a] = v; });
         const t8 = t888();
         $$('[data-t888]').forEach((i) => { const k = i.dataset.t888; if (i.value === '') return; t8[k] = k === 'entry' ? i.value : k === 'downgrade' ? +i.value : k === 'target' ? Math.min(100, Math.max(1, +i.value)) / 100 : Math.max(0, +i.value); });
+        if (SERVER) { srv(api('settings', { sla: s, t888: t8 }), '設定已儲存'); return; }
         db.settings = Object.assign({}, db.settings, { t888: t8, sla: s, nurses: $('#nurses').value.split(/[,，、]/).map((x) => x.trim()).filter(Boolean) });
         save(); render(); toast('設定已儲存');
       };
       $('#mask').onchange = (e) => { ui.mask = e.target.checked; render(); };
+      if (SERVER) { bindServerSecurity(); return; }
       const cp = $('#chg-pass'); if (cp) cp.onclick = async () => { if (await passphraseDialog('變更通行密語', '設定新密語後，資料會立即以新金鑰重新加密；舊的加密備份仍需用舊密語開啟。')) { audit('變更通行密語', ''); save(); render(); toast('已變更通行密語'); } };
       const ae = $('#audit-exp'); if (ae) ae.onclick = () => exportCsv('稽核紀錄.csv', [['時間', '操作者', '動作', '內容'], ...(db.audit || []).map((a) => [a.at, a.user, a.action, a.detail])], '稽核紀錄');
     },
@@ -952,13 +1061,15 @@
     el.oninput = () => { set(el.value); clearTimeout(liveSearch.h); liveSearch.h = setTimeout(() => { const pos = el.selectionStart; render(); const n = $(sel); n.focus(); n.setSelectionRange(pos, pos); }, 250); };
   }
 
+  // 表單一律不送出（CSP 禁止內嵌 onsubmit）。按 Enter 時瀏覽器會先觸發預設按鈕的 click，這裡只需擋下送出；對話框表單保留原生關閉行為
+  document.addEventListener('submit', (e) => { if (e.target.id !== 'dlg-form') e.preventDefault(); });
   document.addEventListener('click', (e) => {
     const tr = e.target.closest('tr[data-href]');
     if (tr && !e.target.closest('a,button,input,select')) location.hash = tr.dataset.href;
   });
   $('#site-filter').onchange = (e) => { ui.site = e.target.value; render(); };
   $('#user-sel').onchange = (e) => { ui.user = e.target.value; saveUI(); };
-  $('#lock-btn').onclick = () => lockNow('手動鎖定');
+  $('#lock-btn').onclick = () => (SERVER ? api('logout', {}).finally(() => location.reload()) : lockNow('手動鎖定'));
   $('#theme-btn').onclick = () => {
     const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
     document.documentElement.dataset.theme = cur === 'dark' ? 'light' : 'dark'; ui.theme = document.documentElement.dataset.theme; saveUI(); themeLabel();
@@ -966,7 +1077,11 @@
   if (ui.theme) document.documentElement.dataset.theme = ui.theme;
   function themeLabel() { const d = (document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')) === 'dark'; $('#theme-btn').textContent = d ? '淺色' : '深色'; }
   themeLabel();
-  window.addEventListener('hashchange', () => { window.scrollTo(0, 0); render(); });
+  window.addEventListener('hashchange', () => {
+    window.scrollTo(0, 0); render();
+    // 伺服器模式：每次換頁都向伺服器取最新資料，看得到其他護理師剛做的處理（不延長閒置時間）
+    if (SERVER && db) api('data', undefined, { poll: true }).then(() => render()).catch(() => {});
+  });
 
   boot();
 })();

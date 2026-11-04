@@ -21,7 +21,14 @@ const toast = (pg) => pg.$eval('#toast', (t) => t.textContent);
   pg.on('dialog', async (d) => { if (d.type() === 'alert') alertFired = true; if (d.type() === 'prompt') await d.accept(promptAnswer); else await d.accept(); });
 
   await pg.goto('http://localhost:8765/index.html'); await pg.evaluate(() => localStorage.clear()); await pg.reload(); await pg.waitForTimeout(600);
-  for (const r of ['dashboard', 'worklist', 'residents', 'quality', '888', 'import', 'rules']) { await pg.goto('http://localhost:8765/index.html#/' + r); await pg.waitForTimeout(150); }
+  let inline = 0;
+  for (const r of ['dashboard', 'worklist', 'residents', 'quality', '888', 'import', 'rules']) {
+    await pg.goto('http://localhost:8765/index.html#/' + r); await pg.waitForTimeout(150);
+    inline += await pg.evaluate(() => [...document.querySelectorAll('*')].filter((el) => [...el.attributes].some((a) => /^on/i.test(a.name))).length);
+  }
+  await pg.goto('http://localhost:8765/index.html#/worklist'); await pg.waitForTimeout(150); await pg.click('tbody tr.click'); await pg.waitForTimeout(200);
+  inline += await pg.evaluate(() => [...document.querySelectorAll('*')].filter((el) => [...el.attributes].some((a) => /^on/i.test(a.name))).length);
+  ok('頁面沒有任何內嵌事件屬性（CSP 會阻擋，且是 XSS 常見入口）', inline === 0, inline + ' 個');
   ok('無任何外部連線（第三方程式、字型、CDN）', ext.length === 0, ext.join(' '));
   ok('正常使用時沒有 CSP 違規', csp.length === 0, csp.join(' | '));
 

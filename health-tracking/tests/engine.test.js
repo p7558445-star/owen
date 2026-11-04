@@ -352,6 +352,11 @@ t('import: device report layout (header on row 4, duplicate columns, 〇 flags, 
   assert.equal(ev.items.body.bmi, 25.3, 'device BMI used when height unknown');
   const db2 = { persons: [], measurements: [], episodes: [] };
   const r2 = E.importMeasurementRows(db2, rows, null, null, { createMissing: true });
+  const db3 = { persons: [], measurements: [], episodes: [] };
+  const pre = E.importMeasurementRows(db3, rows, null, null, { createMissing: true, dryRun: true });
+  assert.equal(pre.added, 2); assert.equal(pre.created, 2); assert.equal(pre.people, 2);
+  assert.equal(db3.persons.length + db3.measurements.length + db3.episodes.length, 0, 'dry run writes nothing');
+  assert.ok(pre.columnLabels.includes('量測時間') && pre.from && pre.to);
   assert.equal(r2.created, 2); assert.equal(db2.persons[1].sex, 'F'); assert.equal(db2.persons[0].birth, '1950-03-04'); assert.equal(db2.persons[0].site, '未分據點');
 });
 

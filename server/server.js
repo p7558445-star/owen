@@ -336,7 +336,8 @@ route('POST', /^\/api\/measurements\/import$/, { limit: 20 * 1024 * 1024 }, asyn
   if (!Array.isArray(body.rows) || body.rows.length > 200000) return send(res, 400, { error: '量測檔格式不正確' });
   const rows = body.rows.map((r) => (Array.isArray(r) ? r.slice(0, 128).map((c) => (typeof c === 'string' ? c.slice(0, 200) : typeof c === 'number' || typeof c === 'boolean' || c === null ? c : '')) : []));
   // 自動建檔只限管理者（新建檔的民眾先列「未分據點」，一般護理師沒有該據點權限）
-  const result = E.importMeasurementRows(DB, rows, sla(), (p) => siteAllowed(req.user, p.site), { createMissing: !!body.createMissing && isAdmin(req.user) });
+  const result = E.importMeasurementRows(DB, rows, sla(), (p) => siteAllowed(req.user, p.site), { createMissing: !!body.createMissing && isAdmin(req.user), dryRun: !!body.dryRun });
+  if (body.dryRun) return send(res, 200, { result });
   persist(); audit(req, '匯入量測', '', `${result.added} 筆、新建檔 ${result.created}、無權限 ${result.denied}`);
   send(res, 200, { data: scoped(req.user), result });
 });

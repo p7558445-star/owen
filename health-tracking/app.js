@@ -640,13 +640,46 @@
   function showImportResult(r) {
     $('#meas-preview').innerHTML = `<p class="small">已匯入 <strong>${r.added}</strong> 筆${r.created ? `，新建檔 <strong>${r.created}</strong> 位民眾` : ''}（標題在第 ${r.headerRow} 列；重複略過 ${r.dup}、時間無法解析 ${r.bad}、數值超出合理範圍 ${r.invalid}${r.denied ? `、無權限 ${r.denied}` : ''}、找不到民眾 ${r.unmatched.length} 人）。本次最新判定異常：紅 ${r.levels.red}、橙 ${r.levels.orange}、黃 ${r.levels.yellow} 人。</p>${r.unmatched.length ? `<p class="small muted">找不到的識別值：${r.unmatched.slice(0, 20).map(esc).join('、')}${r.unmatched.length > 20 ? '…' : ''}</p>` : ''}`;
   }
+  // 量測檔：選檔後先預覽（不寫入），按「確認匯入」才匯入
+  let pendingMeas = null;
+  const pad2 = (n) => String(n).padStart(2, '0');
+  // 送到伺服器前把日期轉成「本地時間＋時區」，避免生日等日期因時區差一天
+  const localIso = (d) => { const o = -d.getTimezoneOffset(); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}${o >= 0 ? '+' : '-'}${pad2(Math.floor(Math.abs(o) / 60))}:${pad2(Math.abs(o) % 60)}`; };
+  const wireRows = (rows) => rows.map((r) => (Array.isArray(r) ? r.map((c) => (c instanceof Date ? localIso(c) : c)) : r));
+  async function previewMeasurements() {
+    const createMissing = !!($('#meas-create') && $('#meas-create').checked);
+    const r = SERVER
+      ? (await api('measurements/import', { rows: wireRows(pendingMeas.rows), createMissing, dryRun: true })).result
+      : E.importMeasurementRows(db.demo ? { persons: [], measurements: [], episodes: [] } : db, pendingMeas.rows, sla(), null, { createMissing: createMissing || db.demo, dryRun: true });
+    const dt = (iso) => (iso ? fmtDT(iso) : '—');
+    $('#meas-preview').innerHTML = `<div class="card" style="margin-top:10px;background:var(--surface-2)">
+      <h3 style="margin:0 0 6px">匯入預覽：${esc(pendingMeas.name)}</h3>
+      <div class="small" style="display:grid;grid-template-columns:auto 1fr;gap:3px 12px">
+        <span class="muted">標題列</span><span>第 ${r.headerRow} 列</span>
+        <span class="muted">辨識到的欄位</span><span>${esc(r.columnLabels.join('、'))}</span>
+        <span class="muted">量測期間</span><span class="tnum">${dt(r.from)} ～ ${dt(r.to)}</span>
+        <span class="muted">將匯入</span><span><strong>${r.added}</strong> 筆、${r.people} 位民眾${r.created ? `（其中新建檔 <strong>${r.created}</strong> 位）` : ''}</span>
+        <span class="muted">略過</span><span>重複 ${r.dup}、時間無法解析 ${r.bad}、數值不合理 ${r.invalid}${r.denied ? `、無權限 ${r.denied}` : ''}、找不到民眾 ${r.unmatched.length} 人</span>
+      </div>
+      ${db.demo ? '<p class="small" style="margin:8px 0 0;color:var(--warn-ink)">目前是示範資料：確認匯入時會清除示範資料，並依量測檔自動建檔，同時要求設定通行密語加密。</p>' : ''}
+      ${r.unmatched.length && !r.created ? `<p class="small muted" style="margin:6px 0 0">找不到的識別值：${r.unmatched.slice(0, 20).map(esc).join('、')}${r.unmatched.length > 20 ? '…' : ''}${$('#meas-create') ? '。若要一併建檔，請勾選上方「自動建檔」。' : '。請先由管理者匯入名冊。'}</p>` : ''}
+      <div class="row" style="margin-top:10px"><button class="btn primary" id="meas-go" type="button" ${r.added ? '' : 'disabled'}>確認匯入 ${r.added} 筆</button><button class="btn" id="meas-cancel" type="button">取消</button></div>
+      <p class="small muted" style="margin:6px 0 0">預覽不會寫入任何資料。</p></div>`;
+    $('#meas-cancel').onclick = () => { pendingMeas = null; $('#meas-file').value = ''; $('#meas-preview').innerHTML = ''; };
+    $('#meas-go').onclick = async () => {
+      const go = $('#meas-go'); go.disabled = true; go.textContent = '匯入中…';
+      const rows = pendingMeas.rows;
+      try {
+        if (SERVER) { const j = await api('measurements/import', { rows: wireRows(rows), createMissing: !!($('#meas-create') && $('#meas-create').checked) }); pendingMeas = null; render(); showImportResult(j.result); }
+        else { await importMeasurements(rows); }
+      } catch (e) { toast(e.message); go.disabled = false; go.textContent = '確認匯入'; }
+    };
+  }
+
   async function importMeasurements(rows) {
     let createMissing = !!($('#meas-create') && $('#meas-create').checked);
-    // 示範資料裡沒有真實民眾，量測檔一定對應不到：提示改用自動建檔
-    if (db.demo && !createMissing) {
-      if (!confirm('目前是示範資料，量測檔裡的民眾都對應不到。\n要清除示範資料，並依量測檔的姓名、性別、生日自動建檔嗎？')) return;
-      createMissing = true;
-    }
+    // 示範資料裡沒有真實民眾：清除示範資料並依量測檔自動建檔（預覽已提示）
+    if (db.demo) createMissing = true;
     // 會寫入真實個資：先設定通行密語（加密）
     if (!vaultKey && (createMissing || sensitive()) && !(await passphraseDialog('設定通行密語', '量測檔含姓名與身分證號，匯入前必須設定通行密語加密。'))) return;
     const fresh = db.demo;
@@ -654,6 +687,7 @@
     const r = E.importMeasurementRows(db, rows, sla(), null, { createMissing });
     if (fresh) audit('設定通行密語', '匯入量測前設定，資料開始加密');
     audit('匯入量測', `${r.added} 筆、新建檔 ${r.created}`);
+    pendingMeas = null;
     save(); render(); showImportResult(r);
   }
 
@@ -1009,7 +1043,12 @@
         };
         $('#roster-issues').onclick = () => exportCsv('名冊問題清單.csv', [['工作表', '列', '姓名', '問題'], ...pendingRoster.issues.map((i) => [i.sheet, i.row, i.name, i.issues.join('；')])], '名冊問題清單');
       }).catch((err) => toast(err.message)); };
-      $('#meas-file').onchange = (e) => { const f = e.target.files[0]; if (!f) return; readWorkbook(f).then((wb) => { const rows = wb.rows.get(wb.SheetNames[0]); if (!SERVER) return importMeasurements(rows); return api('measurements/import', { rows, createMissing: !!($('#meas-create') && $('#meas-create').checked) }).then((j) => { render(); showImportResult(j.result); }); }).catch((err) => toast(err.message)); };
+      $('#meas-file').onchange = (e) => {
+        const f = e.target.files[0]; if (!f) return;
+        $('#meas-preview').innerHTML = '<p class="small muted">讀取中…</p>';
+        readWorkbook(f).then((wb) => { pendingMeas = { name: f.name, rows: wb.rows.get(wb.SheetNames[0]) }; return previewMeasurements(); }).catch((err) => { pendingMeas = null; $('#meas-preview').innerHTML = `<p class="small overdue">${esc(err.message)}</p>`; });
+      };
+      const mc = $('#meas-create'); if (mc) mc.onchange = () => { if (pendingMeas) previewMeasurements().catch((err) => toast(err.message)); };
       $('#tpl').onclick = () => download('量測匯入範本.csv', csv([M_COLS.map((c) => c[0]), [db.persons[0] ? (db.persons[0].demoId || '請填身分證號') : 'A123456789', '2026-10-30 09:15', 138, 86, 78, '', 96, 36.5, 112, '空腹', 135, 160, 48, '', '', 62.5, 86, 31.2, '']]), 'text/csv');
       if (SERVER) return;
       // 備份：正式資料一律加密匯出（用目前的通行密語）；示範資料為明文

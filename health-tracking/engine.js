@@ -852,6 +852,7 @@
     const now = today ? new Date(today) : new Date();
     const issues = [];
     if (v === null || v === undefined || v === '') return { value: null, issues: ['生日空白'] };
+    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v)) v = v.slice(0, 10); // 本地日期＋時間＋時區：只取日期
     let y, m, d;
     if (v instanceof Date) { y = v.getFullYear(); m = v.getMonth() + 1; d = v.getDate(); }
     else if (typeof v === 'number' && v > 10000 && v < 80000) { const x = new Date(Math.round((v - 25569) * DAY)); y = x.getUTCFullYear(); m = x.getUTCMonth() + 1; d = x.getUTCDate(); }
@@ -1031,6 +1032,7 @@
     if (hi < 0) throw new Error('找不到「識別值」（或 ID、身分證號）與「量測時間」欄位；請確認檔案前 15 列內有欄位標題列');
     const col = mapColumns(rows, hi);
     const createMissing = opts && opts.createMissing;
+    const dryRun = opts && opts.dryRun; // 預覽：只統計，不寫入任何資料
     const key = new Map();
     for (const p of db.persons) { if (p.nationalId) key.set(p.nationalId, p); if (p.demoId) key.set(p.demoId, p); }
     const exist = new Set(db.measurements.map((m) => m.personId + '|' + m.at));
@@ -1046,7 +1048,8 @@
         const b = col.birth !== undefined ? parseBirth(r[col.birth]).value : null;
         p = { id: uid('p'), name: col.name !== undefined ? String(r[col.name] ?? '').replace(/\s+/g, '').slice(0, 50) || '（未填）' : '（未填）', sex: { 男: 'M', 女: 'F', M: 'M', F: 'F' }[sx] || (rid[1] === '1' || rid[1] === '8' ? 'M' : 'F'), birth: b, heightCm: null, nationalId: rid, phone: null, site: (opts && opts.site) || '未分據點' };
         if (canWrite && !canWrite(p)) { denied++; continue; }
-        db.persons.push(p); key.set(rid, p); created++;
+        if (!dryRun) db.persons.push(p);
+        key.set(rid, p); created++;
       }
       if (!p) { unmatched.add(rid); continue; }
       if (canWrite && !canWrite(p)) { denied++; continue; }
@@ -1063,11 +1066,19 @@
       add.push(m);
     }
     add.sort((a, b) => new Date(a.at) - new Date(b.at));
+    const LABEL = { id: '識別值', at: '量測時間', sbp: '收縮壓', dbp: '舒張壓', pulse: '脈搏', arr: '心律旗標', afib: 'AFib', spo2: '血氧', temp: '體溫', glucoseType: '血糖類型', glucose: '血糖', ldl: 'LDL', tg: '三酸甘油脂', hdl: 'HDL', tc: '總膽固醇', ua: '尿酸', weight: '體重', bmi: 'BMI', waist: '腰圍', bodyFat: '體脂率', symptoms: '症狀', name: '姓名', birth: '生日', sex: '性別' };
+    const summary = {
+      dup, bad, invalid, denied, created, headerRow: hi + 1, columns: Object.keys(col), columnLabels: Object.keys(col).map((k) => LABEL[k] || k),
+      people: new Set(add.map((m) => m.personId)).size,
+      from: add.length ? add[0].at : null, to: add.length ? add[add.length - 1].at : null,
+      unmatched: [...unmatched].map(maskId),
+    };
+    if (dryRun) return Object.assign(summary, { added: add.length, dryRun: true });
     const last = new Map();
     for (const m of add) { db.measurements.push(m); const res = ingest(db, m.personId, m.at, slaOverride); if (res) last.set(m.personId, res.ev.overall); }
     const levels = { red: 0, orange: 0, yellow: 0 };
     for (const l of last.values()) if (l in levels) levels[l]++;
-    return { added: add.length, dup, bad, invalid, denied, created, headerRow: hi + 1, columns: Object.keys(col), unmatched: [...unmatched].map(maskId), levels };
+    return Object.assign(summary, { added: add.length, levels });
   }
 
   function maskId(id) { return id ? id.slice(0, 2) + '****' + id.slice(-4) : '—'; }

@@ -334,6 +334,27 @@ t('validateBackup accepts generated data and rejects injection attempts', () => 
   assert.throws(() => E.validateBackup({ persons: [] }), /缺少/);
 });
 
+// ── 量測匯入：院內九合一報表格式
+t('import: device report layout (header on row 4, duplicate columns, 〇 flags, 餐別, min SpO2)', () => {
+  const H = ['ID', '姓名', '小站編號', '生日', '性別', '量測時間', '更新時間', '時區', '收縮壓 (mmHg)', '舒張壓 (mmHg)', '脈壓差 (mmHg)', '脈搏 (BPM)', 'ARR', 'AFib', 'PC', 'IHB', '血氧 最高值 (％)', '血氧 最低值 (％)', '脈搏 最高值 (BPM)', '脈搏 最低值 (BPM)', 'ACT (LEVEL)', '血糖(mg/dL)', '餐別', '身高 (cm)', '體重 (kg)', '體重 (kg)', 'BMI', '體脂率 (%)', '總體脂量 (kg)', '肌肉率 (%)', '肌肉量 (kg)', '內臟脂肪 (LEVEL)', '骨骼肌率 (%)', '水份率 (%)', '基礎代謝率 (kcal/day)', '骨量 (kg)', '體溫 (℃)', '總膽固醇 (mg/dL)', '三酸甘油脂 (mg/dL)', '高密度脂蛋白 (mg/dL)', '低密度脂蛋白 (mg/dL)', '腰圍 (cm)'];
+  const row = (id, t, o) => { const r = H.map(() => ''); const set = (h, v) => { r[H.indexOf(h)] = v; }; set('ID', id); set('姓名', '測試者'); set('生日', '1950-03-04'); set('性別', 'F'); set('量測時間', t); set('更新時間', '2026-10-30 10:00'); for (const [k, v] of Object.entries(o)) { if (k === '體重2') r[25] = v; else set(k, v); } return r; };
+  const rows = [['彰化基督教醫院社區健康促進中心'], ['查詢時間：20260727-20261028'], ['個人資料', '', '', '', '', '', '', '', '血壓'], H,
+    row('A123456789', new Date(2026, 9, 1, 9, 0), { '收縮壓 (mmHg)': 165, '舒張壓 (mmHg)': 88, '脈壓差 (mmHg)': 77, '脈搏 (BPM)': 72, 'ARR': '-', 'AFib': '〇', '血氧 最高值 (％)': 98, '血氧 最低值 (％)': 93, '血糖(mg/dL)': 110, '餐別': '空腹', '體重2': 60, 'BMI': 25.3, '體脂率 (%)': 31, '總體脂量 (kg)': 18.6, '體溫 (℃)': 36.5 }),
+    row('B223456787', new Date(2026, 9, 2, 9, 0), { '收縮壓 (mmHg)': 120, '舒張壓 (mmHg)': 70, 'ARR': '〇', 'AFib': '-' })];
+  const db = { persons: [{ id: 'p1', name: 'x', sex: 'F', birth: '1950-03-04', nationalId: 'A123456789', site: 'A' }], measurements: [], episodes: [] };
+  const r = E.importMeasurementRows(db, rows);
+  assert.equal(r.headerRow, 4); assert.equal(r.added, 1); assert.deepEqual(r.unmatched, ['B2****6787']);
+  const m = db.measurements[0];
+  assert.equal(m.sbp, 165); assert.equal(m.pulse, 72, 'not 脈壓差'); assert.equal(m.spo2, 93, 'lowest SpO2'); assert.equal(m.arr, true, 'AFib 〇');
+  assert.equal(m.glucoseType, '空腹'); assert.equal(m.weight, 60, 'the filled 體重 column'); assert.equal(m.bmi, 25.3); assert.equal(m.bodyFat, 31, 'not 總體脂量'); assert.equal(m.temp, 36.5);
+  assert.equal(new Date(m.at).getDate(), 1, '量測時間, not 更新時間');
+  const ev = E.evaluateSession({ sex: 'F', age: 76 }, [m]);
+  assert.equal(ev.items.body.bmi, 25.3, 'device BMI used when height unknown');
+  const db2 = { persons: [], measurements: [], episodes: [] };
+  const r2 = E.importMeasurementRows(db2, rows, null, null, { createMissing: true });
+  assert.equal(r2.created, 2); assert.equal(db2.persons[1].sex, 'F'); assert.equal(db2.persons[0].birth, '1950-03-04'); assert.equal(db2.persons[0].site, '未分據點');
+});
+
 // ── 統計
 t('wilson', () => { const w = E.wilson(8, 10); assert.ok(Math.abs(w.lo - 0.4902) < 0.001 && Math.abs(w.hi - 0.9433) < 0.001); });
 

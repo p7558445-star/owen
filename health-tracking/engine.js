@@ -296,7 +296,8 @@
     const last = (f) => series(rs, f).pop() ?? null;
     const sex = person && person.sex;
     const h = num(person && person.heightCm), w = last('weight'), waist = last('waist'), bf = last('bodyFat');
-    const bmi = h && w ? w / Math.pow(h / 100, 2) : null;
+    const devBmi = last('bmi');
+    const bmi = h && w ? w / Math.pow(h / 100, 2) : devBmi;
     if (bmi === null && waist === null && bf === null) return null;
     const parts = [], why = [];
     let lv = 'green';
@@ -913,8 +914,8 @@
 
   // ───────────────────────── 輸入驗證（資料完整性與安全） ─────────────────────────
   // 生理上合理的範圍；超出者視為輸入或設備錯誤，拒收
-  const RANGES = { sbp: [50, 300], dbp: [20, 200], pulse: [20, 250], spo2: [50, 100], temp: [30, 45], glucose: [10, 1000], ldl: [10, 500], tg: [10, 5000], hdl: [5, 200], tc: [50, 800], ua: [0.5, 20], weight: [20, 300], waist: [30, 200], bodyFat: [2, 75], hba1c: [3, 20] };
-  const RANGE_LABEL = { sbp: '收縮壓', dbp: '舒張壓', pulse: '脈搏', spo2: '血氧', temp: '體溫', glucose: '血糖', ldl: 'LDL', tg: '三酸甘油脂', hdl: 'HDL', tc: '總膽固醇', ua: '尿酸', weight: '體重', waist: '腰圍', bodyFat: '體脂率', hba1c: 'HbA1c' };
+  const RANGES = { sbp: [50, 300], dbp: [20, 200], pulse: [20, 250], spo2: [50, 100], temp: [30, 45], glucose: [10, 1000], ldl: [10, 500], tg: [10, 5000], hdl: [5, 200], tc: [50, 800], ua: [0.5, 20], weight: [20, 300], bmi: [8, 80], waist: [30, 200], bodyFat: [2, 75], hba1c: [3, 20] };
+  const RANGE_LABEL = { sbp: '收縮壓', dbp: '舒張壓', pulse: '脈搏', spo2: '血氧', temp: '體溫', glucose: '血糖', ldl: 'LDL', tg: '三酸甘油脂', hdl: 'HDL', tc: '總膽固醇', ua: '尿酸', weight: '體重', bmi: 'BMI', waist: '腰圍', bodyFat: '體脂率', hba1c: 'HbA1c' };
   function validateMeasurement(m) {
     const issues = [];
     for (const [k, [lo, hi]] of Object.entries(RANGES)) {
@@ -963,8 +964,48 @@
   }
 
   // ───────────────────────── 資料匯入（單機版與伺服器版共用） ─────────────────────────
-  const IMPORT_ALIAS = { id: ['識別值', '身分證', '證號', '個案編號', 'id'], at: ['量測時間', '時間', '日期'], sbp: ['收縮壓', 'sbp'], dbp: ['舒張壓', 'dbp'], pulse: ['脈搏', '心率', 'pulse', 'hr'], arr: ['心律', 'arr', '房顫'], spo2: ['血氧', 'spo2'], temp: ['體溫', 'temp'], glucoseType: ['血糖類型', '血糖種類'], glucose: ['血糖', 'glucose'], ldl: ['ldl', '低密度'], tg: ['三酸甘油', 'tg'], hdl: ['hdl', '高密度'], tc: ['總膽固醇', 'tc'], ua: ['尿酸', 'ua'], weight: ['體重', 'weight'], waist: ['腰圍', 'waist'], bodyFat: ['體脂', 'fat'], symptoms: ['症狀'] };
-  const NUM_FIELDS = ['sbp', 'dbp', 'pulse', 'spo2', 'temp', 'glucose', 'ldl', 'tg', 'hdl', 'tc', 'ua', 'weight', 'waist', 'bodyFat'];
+  // 欄位別名：依序比對，越前面越優先（例如「量測時間」優先於「更新時間」）
+  const IMPORT_ALIAS = {
+    id: ['識別值', '身分證', '證號', '個案編號', 'id'], at: ['量測時間', '測量時間', '時間', '日期'],
+    sbp: ['收縮壓', 'sbp'], dbp: ['舒張壓', 'dbp'], pulse: ['脈搏', '心率', 'pulse', 'hr'],
+    arr: ['心律旗標', 'arr', '心律', '房顫'], afib: ['afib', '心房顫動'],
+    spo2: ['血氧', 'spo2'], temp: ['體溫', 'temp'], glucoseType: ['血糖類型', '血糖種類', '餐別'], glucose: ['血糖', 'glucose'],
+    ldl: ['ldl', '低密度'], tg: ['三酸甘油', 'tg'], hdl: ['hdl', '高密度'], tc: ['總膽固醇', 'tc'], ua: ['尿酸', 'ua'],
+    weight: ['體重', 'weight'], bmi: ['bmi'], waist: ['腰圍', 'waist'], bodyFat: ['體脂率', '體脂', 'fat'], symptoms: ['症狀'],
+    name: ['姓名'], birth: ['生日', '出生'], sex: ['性別'],
+  };
+  const NUM_FIELDS = ['sbp', 'dbp', 'pulse', 'spo2', 'temp', 'glucose', 'ldl', 'tg', 'hdl', 'tc', 'ua', 'weight', 'bmi', 'waist', 'bodyFat'];
+  // 排除會被誤認的欄位（例如「脈壓差」不是脈搏、「總體脂量」不是體脂率、「最高值」優先順序較低）
+  const AVOID = { pulse: /最高|最低|脈壓/, glucose: /類|餐別/, bodyFat: /量\s*\(|kg/i, spo2: /最高/, at: /更新/ };
+  const FLAG_YES = /^(y|yes|1|是|true|arr|afib|有|〇|○|●|◯|v|✓|✔)$/i;
+
+  // 找標題列：前 15 列中同時有「識別值」與「量測時間」類欄位的那一列（報表常在前幾列放單位名稱、查詢期間）
+  function findHeader(rows) {
+    for (let i = 0; i < Math.min(15, rows.length); i++) {
+      const h = (rows[i] || []).map((x) => String(x ?? '').trim().toLowerCase());
+      const has = (k) => h.some((x) => x && IMPORT_ALIAS[k].some((a) => x.includes(a.toLowerCase())) && !(AVOID[k] && AVOID[k].test(x)));
+      if (has('id') && has('at')) return i;
+    }
+    return -1;
+  }
+  // 欄位對應：同名欄位出現多次時（例如兩個「體重」），取有資料最多的那一欄
+  function mapColumns(rows, hi) {
+    const head = rows[hi].map((h) => String(h ?? '').trim().toLowerCase());
+    const body = rows.slice(hi + 1, hi + 501);
+    const filled = (j) => body.reduce((n, r) => n + (r && r[j] !== '' && r[j] !== null && r[j] !== undefined && r[j] !== '-' ? 1 : 0), 0);
+    const col = {}, used = new Set();
+    for (const [k, al] of Object.entries(IMPORT_ALIAS)) {
+      let best = -1;
+      for (const a of al) {
+        const cands = head.map((h, j) => j).filter((j) => !used.has(j) && head[j].includes(a.toLowerCase()) && !(AVOID[k] && AVOID[k].test(head[j])));
+        if (cands.length) { best = cands.reduce((x, y) => (filled(y) > filled(x) ? y : x)); break; }
+      }
+      // 血氧：報表只有最高／最低值時，取最低值（較保守）
+      if (best < 0 && k === 'spo2') { const j = head.findIndex((h, jj) => !used.has(jj) && h.includes('血氧') && h.includes('最低')); if (j >= 0) best = j; }
+      if (best >= 0) { col[k] = best; used.add(best); }
+    }
+    return col;
+  }
 
   // 名冊合併：以身分證號比對，已存在者更新基本資料。allow(site) 可限制只能寫入有權限的據點
   function mergeRoster(db, roster, allow) {
@@ -985,28 +1026,35 @@
   }
 
   // 量測檔（第一列為標題）轉為量測紀錄並依時間逐筆判定。canWrite(person) 可限制據點權限
-  function importMeasurementRows(db, rows, slaOverride, canWrite) {
-    const head = (rows[0] || []).map((h) => String(h).trim().toLowerCase());
-    const col = {};
-    for (const [k, al] of Object.entries(IMPORT_ALIAS)) {
-      const i = head.findIndex((h, j) => al.some((a) => h.includes(a.toLowerCase())) && !Object.values(col).includes(j) && !(k === 'glucose' && h.includes('類')));
-      if (i >= 0) col[k] = i;
-    }
-    if (col.id === undefined || col.at === undefined) throw new Error('找不到「識別值」或「量測時間」欄位');
+  function importMeasurementRows(db, rows, slaOverride, canWrite, opts) {
+    const hi = findHeader(rows);
+    if (hi < 0) throw new Error('找不到「識別值」（或 ID、身分證號）與「量測時間」欄位；請確認檔案前 15 列內有欄位標題列');
+    const col = mapColumns(rows, hi);
+    const createMissing = opts && opts.createMissing;
     const key = new Map();
     for (const p of db.persons) { if (p.nationalId) key.set(p.nationalId, p); if (p.demoId) key.set(p.demoId, p); }
     const exist = new Set(db.measurements.map((m) => m.personId + '|' + m.at));
-    const unmatched = new Set(); let bad = 0, dup = 0, invalid = 0, denied = 0; const add = [];
-    for (const r of rows.slice(1)) {
+    const unmatched = new Set(); let bad = 0, dup = 0, invalid = 0, denied = 0, created = 0; const add = [];
+    for (const r of rows.slice(hi + 1)) {
       if (!Array.isArray(r) || r.every((c) => c === '' || c === null)) continue;
-      const p = key.get(String(r[col.id]).trim().toUpperCase());
-      if (!p) { unmatched.add(String(r[col.id])); continue; }
+      const rid = String(r[col.id] ?? '').trim().toUpperCase();
+      if (!rid) continue;
+      let p = key.get(rid);
+      // 名冊沒有的民眾：選擇自動建檔時，以量測檔的姓名、性別、生日建立（只接受有效格式的身分證號）
+      if (!p && createMissing && /^[A-Z][1289]\d{8}$/.test(rid)) {
+        const sx = col.sex !== undefined ? String(r[col.sex] ?? '').trim().toUpperCase() : '';
+        const b = col.birth !== undefined ? parseBirth(r[col.birth]).value : null;
+        p = { id: uid('p'), name: col.name !== undefined ? String(r[col.name] ?? '').replace(/\s+/g, '').slice(0, 50) || '（未填）' : '（未填）', sex: { 男: 'M', 女: 'F', M: 'M', F: 'F' }[sx] || (rid[1] === '1' || rid[1] === '8' ? 'M' : 'F'), birth: b, heightCm: null, nationalId: rid, phone: null, site: (opts && opts.site) || '未分據點' };
+        if (canWrite && !canWrite(p)) { denied++; continue; }
+        db.persons.push(p); key.set(rid, p); created++;
+      }
+      if (!p) { unmatched.add(rid); continue; }
       if (canWrite && !canWrite(p)) { denied++; continue; }
       const t = r[col.at] instanceof Date ? r[col.at] : new Date(String(r[col.at]).replace(/\//g, '-').replace(' ', 'T'));
       if (isNaN(t)) { bad++; continue; }
       const m = { id: uid('m'), personId: p.id, at: t.toISOString(), source: 'import' };
       for (const k of NUM_FIELDS) if (col[k] !== undefined && r[col[k]] !== '' && r[col[k]] !== null && !isNaN(+r[col[k]])) m[k] = +r[col[k]];
-      if (col.arr !== undefined && /^(y|yes|1|是|true|arr)/i.test(String(r[col.arr]))) m.arr = true;
+      if ((col.arr !== undefined && FLAG_YES.test(String(r[col.arr] ?? '').trim())) || (col.afib !== undefined && FLAG_YES.test(String(r[col.afib] ?? '').trim()))) m.arr = true;
       if (col.glucoseType !== undefined && m.glucose !== undefined) m.glucoseType = String(r[col.glucoseType] || '隨機').slice(0, 10);
       if (col.symptoms !== undefined && r[col.symptoms]) m.symptoms = String(r[col.symptoms]).split(/[、,，;；]/).map((x) => SYMPTOM_BY_LABEL[x.trim()] || null).filter(Boolean);
       if (exist.has(m.personId + '|' + m.at)) { dup++; continue; }
@@ -1019,7 +1067,7 @@
     for (const m of add) { db.measurements.push(m); const res = ingest(db, m.personId, m.at, slaOverride); if (res) last.set(m.personId, res.ev.overall); }
     const levels = { red: 0, orange: 0, yellow: 0 };
     for (const l of last.values()) if (l in levels) levels[l]++;
-    return { added: add.length, dup, bad, invalid, denied, unmatched: [...unmatched].map(maskId), levels };
+    return { added: add.length, dup, bad, invalid, denied, created, headerRow: hi + 1, columns: Object.keys(col), unmatched: [...unmatched].map(maskId), levels };
   }
 
   function maskId(id) { return id ? id.slice(0, 2) + '****' + id.slice(-4) : '—'; }

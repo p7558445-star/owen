@@ -594,6 +594,8 @@
       <div class="card"><h2>2. 量測資料（九合一設備／App 匯出）</h2>
         <p class="small">CSV 或 Excel，每列一次量測，以「識別值」（身分證號或示範編號）對應民眾。同一人 60 分鐘內的多筆視為同一場次重測。匯入後依時間順序逐筆判定並開案。</p>
         <div class="row"><input type="file" id="meas-file" accept=".csv,.xlsx"><button class="btn sm" id="tpl" type="button">下載欄位範本</button></div>
+        <p class="small muted">可直接匯入九合一設備匯出的「量測資料」報表（標題列不在第一列也可以）。</p>
+        ${!SERVER || SERVER.user.role === 'admin' ? `<label class="row small" style="margin-top:4px"><input type="checkbox" id="meas-create">名冊中沒有的民眾，依量測檔的姓名、性別、生日自動建檔（據點先列「未分據點」，之後可補名冊更新）</label>` : ''}
         <div id="meas-preview"></div>
         <details class="small" style="margin-top:8px"><summary>欄位說明</summary><p>${M_COLS.map(([c]) => c).join('、')}。<br>血糖類型填「空腹／飯後／隨機」；心律旗標填 Y；症狀以「、」分隔，可用：${Object.values(E.SYMPTOMS).map((s) => s.replace(/（.*）/, '')).join('、')}。<br>正式串接時建議由 App 後端以 API 即時推送同樣欄位，而非人工匯檔。</p></details>
       </div>
@@ -636,11 +638,22 @@
   }
 
   function showImportResult(r) {
-    $('#meas-preview').innerHTML = `<p class="small">已匯入 <strong>${r.added}</strong> 筆（重複略過 ${r.dup}、時間無法解析 ${r.bad}、數值超出合理範圍 ${r.invalid}${r.denied ? `、無權限 ${r.denied}` : ''}、找不到民眾 ${r.unmatched.length} 人）。本次最新判定異常：紅 ${r.levels.red}、橙 ${r.levels.orange}、黃 ${r.levels.yellow} 人。</p>${r.unmatched.length ? `<p class="small muted">找不到的識別值：${r.unmatched.slice(0, 20).map(esc).join('、')}${r.unmatched.length > 20 ? '…' : ''}</p>` : ''}`;
+    $('#meas-preview').innerHTML = `<p class="small">已匯入 <strong>${r.added}</strong> 筆${r.created ? `，新建檔 <strong>${r.created}</strong> 位民眾` : ''}（標題在第 ${r.headerRow} 列；重複略過 ${r.dup}、時間無法解析 ${r.bad}、數值超出合理範圍 ${r.invalid}${r.denied ? `、無權限 ${r.denied}` : ''}、找不到民眾 ${r.unmatched.length} 人）。本次最新判定異常：紅 ${r.levels.red}、橙 ${r.levels.orange}、黃 ${r.levels.yellow} 人。</p>${r.unmatched.length ? `<p class="small muted">找不到的識別值：${r.unmatched.slice(0, 20).map(esc).join('、')}${r.unmatched.length > 20 ? '…' : ''}</p>` : ''}`;
   }
-  function importMeasurements(rows) {
-    const r = E.importMeasurementRows(db, rows, sla());
-    audit('匯入量測', `${r.added} 筆`);
+  async function importMeasurements(rows) {
+    let createMissing = !!($('#meas-create') && $('#meas-create').checked);
+    // 示範資料裡沒有真實民眾，量測檔一定對應不到：提示改用自動建檔
+    if (db.demo && !createMissing) {
+      if (!confirm('目前是示範資料，量測檔裡的民眾都對應不到。\n要清除示範資料，並依量測檔的姓名、性別、生日自動建檔嗎？')) return;
+      createMissing = true;
+    }
+    // 會寫入真實個資：先設定通行密語（加密）
+    if (!vaultKey && (createMissing || sensitive()) && !(await passphraseDialog('設定通行密語', '量測檔含姓名與身分證號，匯入前必須設定通行密語加密。'))) return;
+    const fresh = db.demo;
+    if (db.demo) db = { persons: [], measurements: [], episodes: [], settings: db.settings, rulesVersion: E.RULES_VERSION, schema: E.SCHEMA };
+    const r = E.importMeasurementRows(db, rows, sla(), null, { createMissing });
+    if (fresh) audit('設定通行密語', '匯入量測前設定，資料開始加密');
+    audit('匯入量測', `${r.added} 筆、新建檔 ${r.created}`);
     save(); render(); showImportResult(r);
   }
 
@@ -996,7 +1009,7 @@
         };
         $('#roster-issues').onclick = () => exportCsv('名冊問題清單.csv', [['工作表', '列', '姓名', '問題'], ...pendingRoster.issues.map((i) => [i.sheet, i.row, i.name, i.issues.join('；')])], '名冊問題清單');
       }).catch((err) => toast(err.message)); };
-      $('#meas-file').onchange = (e) => { const f = e.target.files[0]; if (!f) return; readWorkbook(f).then((wb) => { const rows = wb.rows.get(wb.SheetNames[0]); if (!SERVER) return importMeasurements(rows); return api('measurements/import', { rows }).then((j) => { render(); showImportResult(j.result); }); }).catch((err) => toast(err.message)); };
+      $('#meas-file').onchange = (e) => { const f = e.target.files[0]; if (!f) return; readWorkbook(f).then((wb) => { const rows = wb.rows.get(wb.SheetNames[0]); if (!SERVER) return importMeasurements(rows); return api('measurements/import', { rows, createMissing: !!($('#meas-create') && $('#meas-create').checked) }).then((j) => { render(); showImportResult(j.result); }); }).catch((err) => toast(err.message)); };
       $('#tpl').onclick = () => download('量測匯入範本.csv', csv([M_COLS.map((c) => c[0]), [db.persons[0] ? (db.persons[0].demoId || '請填身分證號') : 'A123456789', '2026-10-30 09:15', 138, 86, 78, '', 96, 36.5, 112, '空腹', 135, 160, 48, '', '', 62.5, 86, 31.2, '']]), 'text/csv');
       if (SERVER) return;
       // 備份：正式資料一律加密匯出（用目前的通行密語）；示範資料為明文

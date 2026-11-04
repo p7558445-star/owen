@@ -334,9 +334,10 @@ route('POST', /^\/api\/roster$/, { limit: 20 * 1024 * 1024 }, async (req, res, b
 });
 route('POST', /^\/api\/measurements\/import$/, { limit: 20 * 1024 * 1024 }, async (req, res, body) => {
   if (!Array.isArray(body.rows) || body.rows.length > 200000) return send(res, 400, { error: '量測檔格式不正確' });
-  const rows = body.rows.map((r) => (Array.isArray(r) ? r.slice(0, 64).map((c) => (typeof c === 'string' ? c.slice(0, 200) : typeof c === 'number' || typeof c === 'boolean' || c === null ? c : '')) : []));
-  const result = E.importMeasurementRows(DB, rows, sla(), (p) => siteAllowed(req.user, p.site));
-  persist(); audit(req, '匯入量測', '', `${result.added} 筆、無權限 ${result.denied}`);
+  const rows = body.rows.map((r) => (Array.isArray(r) ? r.slice(0, 128).map((c) => (typeof c === 'string' ? c.slice(0, 200) : typeof c === 'number' || typeof c === 'boolean' || c === null ? c : '')) : []));
+  // 自動建檔只限管理者（新建檔的民眾先列「未分據點」，一般護理師沒有該據點權限）
+  const result = E.importMeasurementRows(DB, rows, sla(), (p) => siteAllowed(req.user, p.site), { createMissing: !!body.createMissing && isAdmin(req.user) });
+  persist(); audit(req, '匯入量測', '', `${result.added} 筆、新建檔 ${result.created}、無權限 ${result.denied}`);
   send(res, 200, { data: scoped(req.user), result });
 });
 route('POST', /^\/api\/export-log$/, { limit: 4096 }, async (req, res, body) => { audit(req, '匯出', '', `${String(body.what || '').slice(0, 60)}（${+body.count || 0} 列）`); send(res, 200, { ok: true }); });

@@ -1055,6 +1055,7 @@
         key.set(rid, p); created++;
       }
       if (!p) { unmatched.add(rid); continue; }
+
       if (canWrite && !canWrite(p)) { denied++; continue; }
       const t = r[col.at] instanceof Date ? r[col.at] : new Date(String(r[col.at]).replace(/\//g, '-').replace(' ', 'T'));
       if (isNaN(t)) { bad++; continue; }
@@ -1075,6 +1076,9 @@
       people: new Set(add.map((m) => m.personId)).size,
       from: add.length ? add[0].at : null, to: add.length ? add[add.length - 1].at : null,
       unmatched: [...unmatched].map(maskId),
+      // 格式不符（例如少一碼、多一碼、臨時編號）：自動建檔也無法處理，需在設備端更正
+      badFormat: [...unmatched].filter((x) => !/^[A-Z][1289]\d{8}$/.test(x)).map((x) => `${maskId(x)}（${x.length} 碼）`),
+      notInRoster: [...unmatched].filter((x) => /^[A-Z][1289]\d{8}$/.test(x)).map(maskId),
     };
     if (dryRun) return Object.assign(summary, { added: add.length, dryRun: true });
     const last = new Map();

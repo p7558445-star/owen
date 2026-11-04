@@ -659,10 +659,12 @@
         <span class="muted">辨識到的欄位</span><span>${esc(r.columnLabels.join('、'))}</span>
         <span class="muted">量測期間</span><span class="tnum">${dt(r.from)} ～ ${dt(r.to)}</span>
         <span class="muted">將匯入</span><span><strong>${r.added}</strong> 筆、${r.people} 位民眾${r.created ? `（其中新建檔 <strong>${r.created}</strong> 位）` : ''}</span>
-        <span class="muted">略過</span><span>重複 ${r.dup}、時間無法解析 ${r.bad}、數值不合理 ${r.invalid}${r.denied ? `、無權限 ${r.denied}` : ''}、找不到民眾 ${r.unmatched.length} 人</span>
+        <span class="muted">略過</span><span>已匯入過 ${r.dup}、時間無法解析 ${r.bad}、數值不合理 ${r.invalid}${r.denied ? `、無權限 ${r.denied}` : ''}、找不到民眾 ${r.unmatched.length} 人</span>
       </div>
+      ${!r.added && r.dup ? `<p class="small" style="margin:8px 0 0;padding:8px;border-radius:6px;background:var(--lv-green-bg);color:var(--lv-green-ink)">✓ 這份檔案的量測都已經在系統中（${r.dup} 筆，比對民眾與量測時間），<strong>不需要再匯入</strong>。重複匯入不會造成重複計算。若要匯入新資料，請從設備匯出較新的日期區間。</p>` : r.dup ? `<p class="small muted" style="margin:6px 0 0">其中 ${r.dup} 筆先前已匯入過，會自動略過，只匯入新的 ${r.added} 筆。</p>` : ''}
       ${db.demo ? '<p class="small" style="margin:8px 0 0;color:var(--warn-ink)">目前是示範資料：確認匯入時會清除示範資料，並依量測檔自動建檔，同時要求設定通行密語加密。</p>' : ''}
-      ${r.unmatched.length && !r.created ? `<p class="small muted" style="margin:6px 0 0">找不到的識別值：${r.unmatched.slice(0, 20).map(esc).join('、')}${r.unmatched.length > 20 ? '…' : ''}${$('#meas-create') ? '。若要一併建檔，請勾選上方「自動建檔」。' : '。請先由管理者匯入名冊。'}</p>` : ''}
+      ${(r.badFormat || []).length ? `<p class="small" style="margin:6px 0 0;color:var(--warn-ink)">識別值格式不符 ${r.badFormat.length} 人：${r.badFormat.slice(0, 12).map(esc).join('、')}${r.badFormat.length > 12 ? '…' : ''}。身分證號應為 10 碼（1 個英文字母＋9 個數字）；少一碼、多一碼或臨時編號都無法對應，自動建檔也不會建立。請在設備或 App 端更正個人資料後，再匯出、匯入一次（已匯入的資料會自動略過）。</p>` : ''}
+      ${(r.notInRoster || []).length && !r.created ? `<p class="small muted" style="margin:6px 0 0">名冊中沒有 ${r.notInRoster.length} 人：${r.notInRoster.slice(0, 12).map(esc).join('、')}${r.notInRoster.length > 12 ? '…' : ''}${$('#meas-create') ? '。若要一併建檔，請勾選上方「自動建檔」。' : '。請先由管理者匯入名冊。'}</p>` : ''}
       <div class="row" style="margin-top:10px"><button class="btn primary" id="meas-go" type="button" ${r.added ? '' : 'disabled'}>確認匯入 ${r.added} 筆</button><button class="btn" id="meas-cancel" type="button">取消</button></div>
       <p class="small muted" style="margin:6px 0 0">預覽不會寫入任何資料。</p></div>`;
     $('#meas-cancel').onclick = () => { pendingMeas = null; $('#meas-file').value = ''; $('#meas-preview').innerHTML = ''; };

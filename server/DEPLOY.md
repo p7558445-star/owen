@@ -159,7 +159,7 @@ server {
 ## 測試
 
 ```bash
-node server/test/server.test.js            # 伺服器資安與功能（22 項）
+node server/test/server.test.js            # 伺服器資安與功能（24 項）
 node health-tracking/tests/engine.test.js  # 分層規則與流程
 node health-tracking/tests/vault.test.js   # 加密
 ```

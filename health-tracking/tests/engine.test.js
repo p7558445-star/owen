@@ -360,6 +360,29 @@ t('import: device report layout (header on row 4, duplicate columns, 〇 flags, 
   assert.equal(r2.created, 2); assert.equal(db2.persons[1].sex, 'F'); assert.equal(db2.persons[0].birth, '1950-03-04'); assert.equal(db2.persons[0].site, '未分據點');
 });
 
+// ── 據點名稱對照與負責護理師
+t('site aliases normalise roster names', () => {
+  assert.equal(E.normalizeSite('秀水頭前'), '頭前社區'); assert.equal(E.normalizeSite('金齡關懷協會-37'), '永福教會松年團契');
+  assert.equal(E.normalizeSite('鶴鳴社區'), '鶴鳴社區'); assert.equal(E.normalizeSite('X站', { X站: 'Y站' }), 'Y站');
+  const db = { persons: [], measurements: [], episodes: [] };
+  E.mergeRoster(db, [{ name: 'a', nationalId: 'A123456789', site: '金齡關懷協會-5' }, { name: 'b', nationalId: 'B223456787', site: '金齡關懷協會-6' }]);
+  assert.deepEqual([...new Set(db.persons.map((p) => p.site))], ['永福教會松年團契'], 'one site, not one per person');
+});
+t('parse site-nurse sheet: header detection, placeholder 新工', () => {
+  const r = E.parseSiteNurseSheet([['2027年社區護理師'], ['編號', '社區', '負責護理師'], [1, '頭前社區', '陳佩君'], [2, '中庄社區', '新工'], [3, '大同社區', ' 陳佩君 ']]);
+  assert.equal(r.headerRow, 2); assert.equal(r.map['大同社區'], '陳佩君'); assert.equal(r.map['中庄社區'], null);
+  assert.deepEqual(r.nurses, ['陳佩君']); assert.ok(r.issues[0].includes('中庄社區'));
+});
+t('new rounds auto-assigned to the site nurse; open rounds reassigned with a log entry', () => {
+  const db = { persons: [{ id: 'p1', name: 'x', sex: 'M', birth: '1950-01-01', site: '頭前社區' }], measurements: [], episodes: [], settings: { siteNurse: { 頭前社區: '陳佩君' } } };
+  db.measurements.push({ id: 'm1', personId: 'p1', at: '2026-12-01T01:00:00Z', sbp: 165, dbp: 85 });
+  const { episode: ep } = E.ingest(db, 'p1', '2026-12-01T01:00:00Z');
+  assert.equal(ep.assignee, '陳佩君');
+  db.settings.siteNurse = { 頭前社區: '林芷彤' };
+  assert.equal(E.applySiteNurses(db, '2027-01-01T00:00:00Z', '管理者', '2027 名單'), 1);
+  assert.equal(ep.assignee, '林芷彤'); assert.ok(ep.log[ep.log.length - 1].text.includes('陳佩君 → 林芷彤'));
+});
+
 // ── 統計
 t('wilson', () => { const w = E.wilson(8, 10); assert.ok(Math.abs(w.lo - 0.4902) < 0.001 && Math.abs(w.hi - 0.9433) < 0.001); });
 

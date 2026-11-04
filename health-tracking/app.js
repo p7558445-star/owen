@@ -691,6 +691,79 @@
     save(); render(); showImportResult(r);
   }
 
+  // ───────────── 據點與負責護理師 ─────────────
+  let pendingSN = null;
+  function siteNurseCard() {
+    const map = (db.settings && db.settings.siteNurse) || {};
+    const aliases = db.settings && db.settings.siteAliases;
+    const canEdit = !SERVER || SERVER.user.role === 'admin';
+    const count = (site) => db.persons.filter((p) => p.site === site).length;
+    const openCnt = (site) => db.episodes.filter((e) => E.isOpen(e) && (IX.byPerson.get(e.personId) || {}).site === site).length;
+    const dataSites = [...new Set(db.persons.map((p) => p.site))];
+    const mism = dataSites.filter((s) => E.normalizeSite(s, aliases) !== s);
+    const mismPeople = db.persons.filter((p) => mism.includes(p.site)).length;
+    const show = pendingSN ? pendingSN.map : map;
+    const sites = [...new Set([...Object.keys(show), ...dataSites.map((s) => E.normalizeSite(s, aliases))])].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+    const load = {};
+    for (const s of sites) { const n = show[s]; if (!n) continue; load[n] = load[n] || { sites: 0, people: 0, open: 0 }; load[n].sites++; load[n].people += count(s); load[n].open += openCnt(s); }
+    const noOwner = sites.filter((s) => !show[s]);
+    const maxPeople = Math.max(1, ...Object.values(load).map((x) => x.people));
+    return `<div class="card" style="margin-top:12px"><h2>據點與負責護理師</h2>
+      <p class="small">新偵測的追蹤案會自動派給該據點的負責護理師。可上傳年度名單（Excel，含「社區／據點」與「負責護理師」欄位）。</p>
+      ${mism.length ? `<div class="banner" style="margin:8px 0">有 ${mismPeople} 位民眾的據點名稱與年度名單寫法不同（${esc(mism.slice(0, 6).join('、'))}${mism.length > 6 ? `…共 ${mism.length} 種` : ''}），會導致對應不到負責護理師。${canEdit ? '<button class="btn sm" type="button" id="sn-norm" style="margin-left:6px">統一名稱</button>' : ''}</div>` : ''}
+      ${canEdit ? `<div class="row"><input type="file" id="sn-file" accept=".xlsx,.csv"><span class="small muted">選檔後會先預覽，不會立即套用</span></div>` : ''}
+      ${pendingSN ? `<div class="card" style="margin-top:10px;background:var(--surface-2)"><h3 style="margin:0 0 6px">預覽：${esc(pendingSN.file)}（工作表「${esc(pendingSN.sheet)}」）</h3>
+        <p class="small" style="margin:0">共 ${Object.keys(pendingSN.map).length} 個據點、${pendingSN.nurses.length} 位護理師：${esc(pendingSN.nurses.join('、'))}</p>
+        ${pendingSN.issues.length ? `<ul class="small" style="margin:6px 0">${pendingSN.issues.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+        <label class="row small" style="margin-top:6px"><input type="checkbox" id="sn-reassign" checked>把進行中的追蹤案改派給新的負責護理師（寫入各案處理紀錄）</label>
+        <div class="row" style="margin-top:8px"><button class="btn primary" type="button" id="sn-go">確認套用</button><button class="btn" type="button" id="sn-cancel">取消</button></div></div>` : ''}
+      <div class="grid g2" style="margin-top:10px">
+        <div><h3>${pendingSN ? '套用後' : '目前'}各據點負責人</h3><div class="tbl-wrap" style="max-height:340px;overflow:auto"><table class="small"><thead><tr><th>據點</th><th>負責護理師</th><th class="num">民眾</th><th class="num">進行中</th></tr></thead><tbody>
+          ${sites.map((s) => `<tr><td>${esc(s)}</td><td>${show[s] ? esc(show[s]) + (pendingSN && map[s] !== show[s] ? ` <span class="tag warn" data-tip="原本：${esc(map[s] || '未指定')}">變更</span>` : '') : '<span class="overdue">未指定</span>'}</td><td class="num">${count(s) || '<span class="muted">0</span>'}</td><td class="num">${openCnt(s)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">尚未設定</td></tr>'}
+        </tbody></table></div></div>
+        <div><h3>每位護理師的負擔</h3>${Object.keys(load).length ? Object.entries(load).sort((a, b) => b[1].people - a[1].people).map(([n, x]) => `<div class="bar-row" style="grid-template-columns:72px minmax(0,1fr) 130px"><span>${esc(n)}</span><div class="track" style="width:${Math.max(1, (x.people / maxPeople) * 100)}%"><div class="seg neutral" style="flex:1" data-tip="${esc(`${n}：${x.sites} 個據點、${x.people} 位民眾、${x.open} 案進行中`)}"></div></div><span class="small tnum" style="text-align:right">${x.sites} 站・${x.people} 人・${x.open} 案</span></div>`).join('') : '<p class="small muted">尚未設定</p>'}
+          ${noOwner.length ? `<p class="small overdue" style="margin-top:8px">未指定負責人：${esc(noOwner.join('、'))}。這些據點的新案會是「未指定」，請由管理者派案。</p>` : ''}
+          <p class="small muted">民眾數以目前名冊計；尚未匯入名冊的據點顯示 0。</p></div>
+      </div></div>`;
+  }
+  function bindSiteNurse() {
+    const f = $('#sn-file');
+    if (f) f.onchange = async () => {
+      try {
+        const file = f.files[0]; if (!file) return;
+        const wb = await window.XlsxReader.readFile(file);
+        const names = wb.SheetNames.slice().sort((a, b) => /負責|護理師/.test(b) - /負責|護理師/.test(a));
+        let got = null;
+        for (const n of names) { try { got = Object.assign(E.parseSiteNurseSheet(wb.rows.get(n)), { sheet: n }); break; } catch (e) { /* 試下一個工作表 */ } }
+        if (!got) throw new Error('檔案中找不到含「社區／據點」與「負責護理師」欄位的工作表');
+        const aliases = db.settings && db.settings.siteAliases;
+        const listed = new Set(Object.keys(got.map));
+        const missing = [...new Set(db.persons.map((p) => E.normalizeSite(p.site, aliases)))].filter((s) => !listed.has(s));
+        for (const s of missing) got.issues.push(`「${s}」有 ${db.persons.filter((p) => E.normalizeSite(p.site, aliases) === s).length} 位民眾，但不在新名單中，套用後沒有負責人`);
+        pendingSN = Object.assign(got, { file: file.name });
+        render();
+      } catch (e) { toast(e.message); }
+    };
+    const c = $('#sn-cancel'); if (c) c.onclick = () => { pendingSN = null; render(); };
+    const go = $('#sn-go');
+    if (go) go.onclick = () => {
+      const reassign = $('#sn-reassign').checked, map = pendingSN.map, nurses = pendingSN.nurses;
+      if (SERVER) { srv(api('site-nurses', { map, reassign }), (j) => { pendingSN = null; return `已套用；帳號據點更新 ${j.usersUpdated} 位、改派 ${j.moved} 案`; }); return; }
+      db.settings = Object.assign({}, db.settings, { siteNurse: map, nurses });
+      const moved = reassign ? E.applySiteNurses(db, nowISO(), ui.user, `依「${pendingSN.file}」`) : 0;
+      audit('更新據點負責護理師', `${Object.keys(map).length} 個據點、改派 ${moved} 案`);
+      pendingSN = null; save(); render(); toast(`已套用；改派 ${moved} 案`);
+    };
+    const nb = $('#sn-norm');
+    if (nb) nb.onclick = () => {
+      if (!confirm('把名冊上的據點名稱統一成年度名單的寫法？（例如「秀水頭前」→「頭前社區」、「金齡關懷協會-1～86」→「永福教會松年團契」）')) return;
+      if (SERVER) { srv(api('normalize-sites', {}), (j) => `已統一 ${j.changed} 位民眾的據點名稱`); return; }
+      let n = 0; const aliases = db.settings && db.settings.siteAliases;
+      for (const p of db.persons) { const to = E.normalizeSite(p.site, aliases); if (to !== p.site) { p.site = to; n++; } }
+      audit('統一據點名稱', `${n} 位`); save(); render(); toast(`已統一 ${n} 位民眾的據點名稱`);
+    };
+  }
+
   // ───────────── 伺服器模式：帳號與稽核 ─────────────
   let usersCache = null, auditCache = null;
   function serverSecurityCard() {
@@ -775,6 +848,7 @@
       <li>複測日已過未回站者，列入「待回站複測」，請通知民眾回站。</li>
       <li>結案原因限於：已轉由醫師持續管理（需登記回診日期）、死亡、遷出、失聯、拒絕。</li></ul></div>
     <div class="card" style="margin-top:12px"><h2>系統解讀（請臨床委員會確認）</h2><ol class="small">${E.ASSUMPTIONS.map((a) => `<li>${esc(a)}</li>`).join('')}</ol></div>
+    ${siteNurseCard()}
     ${SERVER ? serverSecurityCard() : `<div class="card" style="margin-top:12px"><h2>資訊安全</h2>
       <div class="small" style="display:grid;grid-template-columns:auto 1fr;gap:4px 12px">
         <span class="muted">資料保護</span><span>${db.demo ? '示範資料（虛構，未加密）' : vaultKey ? `✓ 已加密：AES-256-GCM，金鑰由通行密語經 PBKDF2-SHA256 ${window.Vault.ITER.toLocaleString()} 次衍生` : '<span class="overdue">未加密</span>'}</span>
@@ -1102,6 +1176,7 @@
         save(); render(); toast('設定已儲存');
       };
       $('#mask').onchange = (e) => { ui.mask = e.target.checked; render(); };
+      bindSiteNurse();
       if (SERVER) { bindServerSecurity(); return; }
       const cp = $('#chg-pass'); if (cp) cp.onclick = async () => { if (await passphraseDialog('變更通行密語', '設定新密語後，資料會立即以新金鑰重新加密；舊的加密備份仍需用舊密語開啟。')) { audit('變更通行密語', ''); save(); render(); toast('已變更通行密語'); } };
       const ae = $('#audit-exp'); if (ae) ae.onclick = () => exportCsv('稽核紀錄.csv', [['時間', '操作者', '動作', '內容'], ...(db.audit || []).map((a) => [a.at, a.user, a.action, a.detail])], '稽核紀錄');

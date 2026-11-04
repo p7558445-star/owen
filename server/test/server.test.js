@@ -148,6 +148,22 @@ async function t(name, fn) { try { await fn(); pass++; results.push('PASS ' + na
     const v = I.verifyAudit(); fs.writeFileSync(f, orig);
     assert.ok(!v.ok && v.brokenAt > 0);
   });
+  await t('據點負責護理師名單：同步帳號可見據點、改派進行中案件、拒絕原型污染、限管理者', async () => {
+    assert.equal((await n.req('POST', '/api/site-nurses', { map: { A站: '護理師甲' } })).status, 403);
+    const r = await a.req('POST', '/api/site-nurses', JSON.stringify({ map: { A站: '護理師甲', C站: '護理師甲', '__proto__': 'x' }, reassign: true }));
+    assert.equal(r.status, 200);
+    assert.equal(({}).polluted, undefined); assert.ok(!('__proto__' in I.db().settings.siteNurse && I.db().settings.siteNurse.__proto__ === 'x'));
+    assert.deepEqual(I.db().users.find((u) => u.username === 'nurse.a').sites, ['A站', 'C站']);
+    assert.ok(r.j.data.sites.includes('C站'), '名單上的新據點可供指派');
+    const ep = I.db().episodes[0];
+    assert.equal(ep.assignee, '護理師甲');
+  });
+  await t('統一據點名稱（限管理者）', async () => {
+    I.db().persons.push({ id: 'pz', name: 'z', site: '秀水頭前', nationalId: null });
+    assert.equal((await n.req('POST', '/api/normalize-sites', {})).status, 403);
+    const r = await a.req('POST', '/api/normalize-sites', {});
+    assert.equal(r.j.changed, 1); assert.equal(I.db().persons.find((p) => p.id === 'pz').site, '頭前社區');
+  });
   await t('連續登入失敗會鎖定', async () => {
     const c = client(); let last;
     for (let i = 0; i < 6; i++) last = await c.login('nurse.a', 'wrong-password-' + i);

@@ -196,7 +196,7 @@ function scoped(u) {
     measurements: DB.measurements.filter((m) => ids.has(m.personId)),
     episodes: DB.episodes.filter((e) => ids.has(e.personId)),
     settings: Object.assign({}, DB.settings, { nurses: DB.users.filter((x) => !x.disabled && x.role === 'nurse').map((x) => x.name) }),
-    sites: [...new Set(DB.persons.map((p) => p.site))].sort(),
+    sites: [...new Set([...DB.persons.map((p) => p.site), ...Object.keys((DB.settings && DB.settings.siteNurse) || {})])].sort(),
     rulesVersion: DB.rulesVersion, schema: DB.schema,
   };
 }
@@ -361,6 +361,33 @@ route('POST', /^\/api\/regrade$/, { admin: true }, async (req, res) => {
   const ch = E.regradeOpen(DB, new Date().toISOString(), sla(), req.user.name);
   persist(); audit(req, '依新規則重新判定', '', `${ch.length} 案`);
   send(res, 200, { data: scoped(req.user), changes: ch.length });
+});
+// 年度「據點負責護理師」名單：姓名相符的護理師帳號，可見據點同步更新為其負責據點
+const BAD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+route('POST', /^\/api\/site-nurses$/, { admin: true, limit: 65536 }, async (req, res, body) => {
+  const map = {};
+  for (const [k, v] of Object.entries(body.map || {}).slice(0, 500)) {
+    const site = String(k).trim().slice(0, 60);
+    if (!site || BAD_KEYS.has(site)) continue;
+    map[site] = v ? String(v).replace(/\s+/g, '').slice(0, 30) : null;
+  }
+  DB.settings = Object.assign({}, DB.settings, { siteNurse: map });
+  let usersUpdated = 0;
+  for (const u of DB.users) {
+    if (u.role !== 'nurse' || u.disabled) continue;
+    const sites = Object.keys(map).filter((s) => map[s] === u.name).sort();
+    if (sites.length && JSON.stringify(sites) !== JSON.stringify([...u.sites].sort())) { u.sites = sites; usersUpdated++; }
+  }
+  const moved = body.reassign ? E.applySiteNurses(DB, new Date().toISOString(), req.user.name, '依新年度負責護理師名單') : 0;
+  persist(); audit(req, '更新據點負責護理師', '', `${Object.keys(map).length} 個據點；帳號據點更新 ${usersUpdated}；改派 ${moved} 案`);
+  send(res, 200, { data: scoped(req.user), usersUpdated, moved });
+});
+route('POST', /^\/api\/normalize-sites$/, { admin: true }, async (req, res) => {
+  let changed = 0;
+  for (const p of DB.persons) { const to = E.normalizeSite(p.site, DB.settings && DB.settings.siteAliases); if (to !== p.site) { p.site = to; changed++; } }
+  for (const u of DB.users) u.sites = [...new Set(u.sites.map((s) => (s === '*' ? s : E.normalizeSite(s, DB.settings && DB.settings.siteAliases))))];
+  persist(); audit(req, '統一據點名稱', '', `${changed} 位`);
+  send(res, 200, { data: scoped(req.user), changed });
 });
 route('GET', /^\/api\/users$/, { admin: true }, async (req, res) => send(res, 200, { users: DB.users.map(publicUser) }));
 route('POST', /^\/api\/users$/, { admin: true, limit: 8192 }, async (req, res, body) => {

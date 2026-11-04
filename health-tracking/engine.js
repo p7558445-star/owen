@@ -443,6 +443,8 @@
       sessions: [session.id], log: [],
     };
     ep.due = computeDue(ep, sla, ep.items);
+    const owner = db.settings && db.settings.siteNurse && db.settings.siteNurse[person.site];
+    if (owner) ep.assignee = owner;
     log(ep, session.at, 'detected', `偵測：${LEVEL_LABEL[lv]}層（${ep.items.filter((i) => i.level === ev.overall && !i.lifestyle).map((i) => ITEM_LABEL[i.key]).join('、')}）${why ? '｜' + why : ''}`);
     db.episodes.push(ep);
     return ep;
@@ -1009,7 +1011,8 @@
   }
 
   // 名冊合併：以身分證號比對，已存在者更新基本資料。allow(site) 可限制只能寫入有權限的據點
-  function mergeRoster(db, roster, allow) {
+  function mergeRoster(db, roster, allow, aliases) {
+    roster = roster.map((r) => Object.assign({}, r, { site: normalizeSite(r.site, aliases || (db.settings && db.settings.siteAliases)) }));
     const byId = new Map(db.persons.filter((p) => p.nationalId).map((p) => [p.nationalId, p]));
     let add = 0, upd = 0, denied = 0;
     for (const r of roster) {
@@ -1079,6 +1082,57 @@
     const levels = { red: 0, orange: 0, yellow: 0 };
     for (const l of last.values()) if (l in levels) levels[l]++;
     return Object.assign(summary, { added: add.length, levels });
+  }
+
+  // ───────────────────────── 據點名稱對照與負責護理師 ─────────────────────────
+  // 名冊（優活雲）上的據點寫法與年度名單不同時，統一成年度名單的名稱
+  const DEFAULT_SITE_ALIASES = { '秀水頭前': '頭前社區', '彰化教會社區': '彰化教會', 'YMCA瑪玉據點': '瑪玉社區', '阿夷社區': '阿夷里社區', '彰化成功社區': '成功社區' };
+  const SITE_RULES = [[/^金齡關懷協會(-\d+)?$/, '永福教會松年團契']];
+  function normalizeSite(name, aliases) {
+    const n = String(name || '').trim();
+    const map = Object.assign({}, DEFAULT_SITE_ALIASES, aliases || {});
+    if (Object.prototype.hasOwnProperty.call(map, n)) return map[n];
+    for (const [re, to] of SITE_RULES) if (re.test(n)) return to;
+    return n;
+  }
+  // 名單中表示「尚未指定人員」的寫法
+  const PLACEHOLDER_NURSE = /^(新工|新進|待補|待聘|未定|空缺|-|—)$/;
+
+  // 解析年度「社區負責護理師」工作表：找含「社區／據點」與「護理師」的標題列
+  function parseSiteNurseSheet(rows) {
+    let hi = -1, cs = -1, cn = -1;
+    for (let i = 0; i < Math.min(15, rows.length) && hi < 0; i++) {
+      const h = (rows[i] || []).map((x) => String(x ?? '').trim());
+      const a = h.findIndex((x) => /社區|據點/.test(x) && !/護理/.test(x)), b = h.findIndex((x) => /護理師|負責人/.test(x));
+      if (a >= 0 && b >= 0) { hi = i; cs = a; cn = b; }
+    }
+    if (hi < 0) throw new Error('找不到「社區／據點」與「負責護理師」欄位');
+    const map = {}, issues = [];
+    for (let i = hi + 1; i < rows.length; i++) {
+      const r = rows[i] || [];
+      const site = String(r[cs] ?? '').trim(), nurse = String(r[cn] ?? '').replace(/\s+/g, '').slice(0, 30);
+      if (!site) continue;
+      if (map[site] !== undefined) issues.push(`「${site}」重複出現，以第 ${i + 1} 列為準`);
+      map[site] = PLACEHOLDER_NURSE.test(nurse) || !nurse ? null : nurse;
+      if (!map[site]) issues.push(`「${site}」尚未指定護理師（名單寫「${nurse || '空白'}」）`);
+    }
+    const nurses = [...new Set(Object.values(map).filter(Boolean))];
+    return { map, nurses, issues, headerRow: hi + 1 };
+  }
+
+  // 依名單把進行中的追蹤案改派給該據點的負責護理師（寫入處理紀錄）
+  function applySiteNurses(db, at, by, label) {
+    const map = (db.settings && db.settings.siteNurse) || {};
+    let n = 0;
+    for (const e of db.episodes.filter(isOpen)) {
+      const p = db.persons.find((x) => x.id === e.personId);
+      const to = p && map[p.site];
+      if (to && e.assignee !== to) {
+        log(e, at, 'assign', `${label || '依據點負責護理師名單'}改派：${e.assignee || '未指定'} → ${to}`, by);
+        e.assignee = to; n++;
+      }
+    }
+    return n;
   }
 
   function maskId(id) { return id ? id.slice(0, 2) + '****' + id.slice(-4) : '—'; }
@@ -1152,7 +1206,7 @@
   const Engine = {
     LEVELS, RANK, LEVEL_LABEL, LEVEL_MEANING, ITEMS, ITEM_LABEL, SYMPTOMS, SYMPTOM_BY_LABEL, ASSUMPTIONS, DEFAULT_SLA, CLOSE_REASONS,
     STATES, OPEN_STATES, STATE_LABEL, isOpen, recheckOverdue, SCHEMA, migrateWorkflow, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, DOWNGRADE_888, KEYS_888, cascade888,
-    LIFESTYLE, lifestylePrescription, RANGES, validateMeasurement, validateBackup, mergeRoster, importMeasurementRows, IMPORT_ALIAS, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
+    LIFESTYLE, lifestylePrescription, DEFAULT_SITE_ALIASES, normalizeSite, parseSiteNurseSheet, applySiteNurses, RANGES, validateMeasurement, validateBackup, mergeRoster, importMeasurementRows, IMPORT_ALIAS, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
     maxLevel, evaluateSession, groupSessions, ingest, act, nextStep, quality, wilson, prescription,
     parseRoster, parseBirth, validTwId, maskId, maskName, ageAt, addDays, sameDay, normGluType, uid,
   };

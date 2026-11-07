@@ -750,13 +750,22 @@
         ep.due = computeDue(ep, sla, ep.items);
         return { ev, episode: ep };
       }
-      // 本輪進行中又量到更高層級：本輪升級，回到「偵測」重新通知
+      // 本輪進行中又量到更高層級：升到紅層或仍在「偵測」→ 回到偵測、重新通知；
+      // 已通知或已介入、升到黃／橙層 → 不退回，停在原步驟，期限依新層級從升級日起算，並須補一筆通知（告知民眾就醫）
+      if (RANK[ev.overall] > RANK[ep.level] && ev.overall !== 'red' && ['notified', 'intervened'].includes(ep.state)) {
+        const prev = ep.level;
+        ep.level = ev.overall; ep.levelAt = at; ep.levelSessionId = session.id; ep.basisSessionIds = [session.id]; ep.items = summarizeItems(ev); ep.emergency = ev.emergency; ep.provisional = ev.provisional;
+        ep.due = computeDue(ep, sla, ep.items);
+        ep.upgradeNotice = { at, from: prev, to: ev.overall };
+        log(ep, at, 'upgraded', `${why ? why + '，' : '新量測'}升級：${LEVEL_LABEL[prev]} → ${LEVEL_LABEL[ev.overall]}，不退回，停在「${STATE_LABEL[ep.state]}」；請補一筆通知，告知民眾${RANK[ev.overall] >= 2 ? '就醫' : '量測結果'}`);
+        return { ev, episode: ep };
+      }
       if (RANK[ev.overall] > RANK[ep.level]) {
         const prev = ep.level;
         ep.level = ev.overall; ep.levelAt = at; ep.levelSessionId = session.id; ep.basisSessionIds = [session.id]; ep.items = summarizeItems(ev); ep.emergency = ev.emergency; ep.provisional = ev.provisional;
         ep.state = 'detected';
         ep.due = computeDue(ep, sla, ep.items);
-        delete ep.notify; delete ep.intervene;
+        delete ep.notify; delete ep.intervene; delete ep.upgradeNotice;
         log(ep, at, 'upgraded', `${why ? why + '，' : '新量測'}升級：${LEVEL_LABEL[prev]} → ${LEVEL_LABEL[ev.overall]}，回到偵測、重新通知`);
         return { ev, episode: ep };
       }
@@ -822,6 +831,10 @@
         ep.notify = { at, method: p.method || '電話', by };
         ep.state = 'notified';
         log(ep, at, 'notified', `通知民眾（${ep.notify.method}）${ep.assignee ? '｜負責：' + ep.assignee : ''}${p.note ? '：' + p.note : ''}`, by); break;
+      case 'renotify': // 進行中升級（不退回）後補的通知紀錄
+        if (!ep.upgradeNotice || ep.upgradeNotice.done) throw new Error('目前沒有需要補的通知');
+        ep.upgradeNotice.done = { at, method: p.method || '電話', by };
+        log(ep, at, 'notified', `補通知：已升級為${LEVEL_LABEL[ep.level]}層（${ep.upgradeNotice.done.method}）${p.note ? '：' + p.note : ''}`, by); break;
       case 'intervene':
         if (ep.state !== 'notified') throw new Error('需先完成通知');
         if (!p.rx) throw new Error('只要有異常就要完成健康處方');
@@ -831,6 +844,7 @@
         log(ep, at, 'intervened', `介入：開立健康處方${p.note ? '：' + p.note : ''}`, by); break;
       case 'confirm': {
         if (ep.state !== 'intervened') throw new Error('需先完成介入');
+        if (ep.upgradeNotice && !ep.upgradeNotice.done) throw new Error(`本輪已升級為${LEVEL_LABEL[ep.level]}層，請先補通知`);
         const needVisit = RANK[ep.level] >= 2;
         if (needVisit && !p.visitDate) throw new Error('橙／紅層需登記就醫日期');
         ep.confirm = { at, by, type: needVisit ? 'visit' : 'rx', visitDate: p.visitDate || null, facility: p.facility || '', result: p.result || '' };
@@ -868,6 +882,7 @@
   function nextStep(ep, now) {
     const t = new Date(now || Date.now());
     const mk = (label, due) => ({ label, due, overdue: !!due && new Date(due) < t, daysLeft: due ? Math.round((startOfDay(due) - startOfDay(t)) / DAY) : null });
+    if (isOpen(ep) && ep.upgradeNotice && !ep.upgradeNotice.done) return mk(`補通知：已升級為${LEVEL_LABEL[ep.level]}層${RANK[ep.level] >= 2 ? '，告知就醫' : ''}`, ep.due.notify);
     switch (ep.state) {
       case 'detected': return mk(ep.level === 'red' ? '當日通知民眾' : '通知民眾', ep.due.notify);
       case 'notified': return mk('介入：開立健康處方', ep.due.intervene);

@@ -450,6 +450,34 @@ t('import: pending readings older than 7 days at import time open rounds', () =>
   assert.equal(db2.episodes.length, 0); assert.ok(db2.persons[0].pending.length >= 1);
 });
 
+// ── 處理中途升級不退回（紅層除外），需補通知
+t('mid-round upgrade to orange keeps progress and requires a make-up notice', () => {
+  const db = db0();
+  const { episode: ep } = add2(db, D(1), { sbp: 145, dbp: 80 });
+  assert.equal(ep.level, 'yellow');
+  E.act(db, ep.id, 'notify', {}, D(2)); E.act(db, ep.id, 'intervene', { rx: 'x' }, D(3));
+  add(db, D(20, 7), { sbp: 168, dbp: 92 }); add(db, D(20, 10), { sbp: 166, dbp: 90 });
+  assert.equal(ep.level, 'orange'); assert.equal(ep.state, 'intervened', 'not sent back to detect');
+  assert.ok(ep.notify && ep.intervene, 'earlier steps kept');
+  assert.ok(ep.log.some((l) => l.text.includes('不退回')));
+  assert.ok(E.nextStep(ep, D(20, 12)).label.startsWith('補通知'));
+  assert.equal(ep.due.notify.slice(0, 10), new Date(2026, 0, 23, 23, 59).toISOString().slice(0, 10), 'orange notify deadline from upgrade date');
+  assert.throws(() => E.act(db, ep.id, 'confirm', { visitDate: '2026-01-25' }, D(25)), /補通知/);
+  E.act(db, ep.id, 'renotify', { method: '電話', note: '請就醫' }, D(21), '護理師');
+  assert.ok(ep.upgradeNotice.done); assert.equal(ep.log[ep.log.length - 1].type, 'notified');
+  assert.throws(() => E.act(db, ep.id, 'renotify', {}, D(21)), /沒有需要補/);
+  assert.throws(() => E.act(db, ep.id, 'confirm', {}, D(25)), /就醫日期/, 'orange now needs a visit date');
+  E.act(db, ep.id, 'confirm', { visitDate: '2026-01-25' }, D(26));
+  assert.equal(ep.state, 'confirmed');
+});
+t('mid-round upgrade to red still goes back to detect for same-day notice', () => {
+  const db = db0();
+  const { episode: ep } = add2(db, D(1), { sbp: 145, dbp: 80 });
+  E.act(db, ep.id, 'notify', {}, D(2));
+  add(db, D(5), { sbp: 185, dbp: 100 });
+  assert.equal(ep.level, 'red'); assert.equal(ep.state, 'detected'); assert.equal(ep.notify, undefined); assert.equal(ep.upgradeNotice, undefined);
+});
+
 // ── 資安：輸入驗證
 t('validateMeasurement rejects implausible values', () => {
   assert.deepEqual(E.validateMeasurement({ at: '2026-01-01T00:00:00Z', sbp: 130, dbp: 80 }), []);

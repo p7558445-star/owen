@@ -283,7 +283,7 @@ route('POST', /^\/api\/episodes\/([\w-]{1,64})\/act$/, { limit: 65536 }, async (
   if (!ep) return send(res, 404, { error: '找不到追蹤案' });
   personFor(req.user, ep.personId);
   const action = String(body.action || '');
-  if (!['notify', 'intervene', 'confirm', 'close'].includes(action)) return send(res, 400, { error: '不支援的操作' });
+  if (!['notify', 'renotify', 'intervene', 'confirm', 'close'].includes(action)) return send(res, 400, { error: '不支援的操作' });
   const p = body.payload || {};
   const payload = {};
   for (const k of ['method', 'note', 'assignee', 'rx', 'visitDate', 'facility', 'result', 'reason', 'followupDate']) if (p[k] != null) payload[k] = String(p[k]).slice(0, k === 'rx' ? 20000 : 500);

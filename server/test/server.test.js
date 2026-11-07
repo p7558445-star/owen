@@ -113,6 +113,9 @@ async function t(name, fn) { try { await fn(); pass++; results.push('PASS ' + na
   });
   await t('量測、開案與操作者身分由伺服器決定（無法冒名）', async () => {
     const p = I.db().persons.find((x) => x.site === 'A站');
+    // 單次橙層血壓：暫定、不開案；7 天內第 2 次以平均判定
+    const r1 = await n.req('POST', `/api/persons/${p.id}/measurements`, { m: { at: new Date(Date.now() - 3 * 3600000).toISOString(), sbp: 165, dbp: 85 } });
+    assert.equal(r1.status, 200); assert.ok(r1.j.pending.includes('bp')); assert.equal(r1.j.pendingLevel, 'orange'); assert.equal(r1.j.data.episodes.length, 0);
     const r = await n.req('POST', `/api/persons/${p.id}/measurements`, { m: { at: new Date().toISOString(), sbp: 165, dbp: 85 } });
     assert.equal(r.status, 200); assert.equal(r.j.overall, 'orange');
     const ep = r.j.data.episodes[0];

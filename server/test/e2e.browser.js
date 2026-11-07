@@ -40,8 +40,12 @@ const R = []; const ok = (n, c, x = '') => R.push([c ? 'PASS' : 'FAIL', n, x]);
   ok('護理師看到自己據點的民眾、身分證號遮蔽', /王大明/.test(nhtml) && !/A123456789/.test(nhtml) && /A1\*\*\*\*6789/.test(nhtml));
   await N.click('tbody tr.click >> nth=0'); await N.waitForTimeout(400);
   const href = N.url();
+  // 單次橙層血壓：暫定、不開案；3 小時前已量 1 次 → 7 天平均判定為橙層
+  const local = (ms) => { const d = new Date(Date.now() - ms); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
+  await N.click('#add-m'); await N.fill('#dlg input[name=at]', local(3 * 3600000)); await N.fill('#dlg input[name=sbp]', '168'); await N.fill('#dlg input[name=dbp]', '88'); await N.click('#dlg-foot .btn.primary'); await N.waitForTimeout(900);
+  ok('單次橙層血壓為暫定、提醒 7 天內再量', /暫定橙層/.test(await toast(N)) && !(await N.$('[data-act=notify]')), await toast(N));
   await N.click('#add-m'); await N.fill('#dlg input[name=sbp]', '168'); await N.fill('#dlg input[name=dbp]', '88'); await N.click('#dlg-foot .btn.primary'); await N.waitForTimeout(900);
-  ok('護理師新增量測，伺服器判定為橙層', /橙層/.test(await toast(N)), await toast(N));
+  ok('護理師新增第 2 次量測，伺服器以 7 天平均判定為橙層', /橙層/.test(await toast(N)), await toast(N));
   await N.click('[data-act=notify]'); await N.waitForTimeout(900);
   ok('護理師完成「通知」', /已記錄：通知/.test(await toast(N)), await toast(N));
 

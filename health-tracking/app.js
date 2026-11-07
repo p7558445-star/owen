@@ -86,11 +86,23 @@
       latest(pid) {
         if (evalCache.has(pid)) return evalCache.get(pid);
         const ss = this.sessions(pid); const s = ss[ss.length - 1];
-        const r = s ? { session: s, ev: E.evaluateSession(ctx(byPerson.get(pid), s.at), s.readings) } : null;
+        const r = s ? { session: s, ev: E.evaluateTimeline(byPerson.get(pid), ss.slice(-40), new Date()).pop().ev } : null;
         evalCache.set(pid, r); return r;
       },
       // 管理層級：進行中的輪次；上一輪已確認、仍在等複測者維持該層級；其餘依是否量測過為綠或未量測
       mgmt(pid) { const e = open.get(pid); if (e) return e.level; const x = last.get(pid); if (x && x.state === 'confirmed' && x.nextDue) return x.level; return this.latest(pid) ? 'green' : 'none'; },
+      // 偵測（或升級）後的量測：血壓、脈搏、血氧（各場次單次數值與層級）
+      after(ep) {
+        const { keys, only } = E.vitalKeys(ep);
+        if (!keys.length) return { keys, only, rows: [] };
+        const ss = this.sessions(ep.personId), p = byPerson.get(ep.personId);
+        const basis = ep.basisSessionIds || [ep.levelSessionId || ep.detectSessionId];
+        const from = ss.filter((s) => basis.includes(s.id)).reduce((m, s) => (new Date(s.at) > new Date(m) ? s.at : m), ep.detectedAt);
+        const rows = ss.filter((s) => new Date(s.at) > new Date(from))
+          .map((s) => { const ev = E.evaluateSession(ctx(p, s.at), s.readings); return { at: s.at, parts: keys.map((k) => ev.items[k]).filter(Boolean).map((r) => ({ key: r.key, value: r.value, level: r.level })) }; })
+          .filter((r) => r.parts.length);
+        return { keys, only, rows };
+      },
       stage(pid) { const e = open.get(pid); if (e) return E.STATE_LABEL[e.state]; const x = last.get(pid); return x && x.state === 'confirmed' && x.nextDue ? `確認・待複測 ${fmtD(x.nextDue)}` : ''; },
     };
   }
@@ -102,7 +114,7 @@
 
   // ───────────── 共用元件 ─────────────
   const lv = (l, extra = '') => `<span class="lv ${l || 'na'}">${E.LEVEL_LABEL[l] || '—'}${extra}</span>`;
-  const dot = (r) => r ? `<span class="dot ${r.level}" data-tip="${esc(`${r.label}：${r.value}\n${E.LEVEL_LABEL[r.level]}層｜${r.reason}`)}">${r.level === 'na' ? '–' : E.LEVEL_LABEL[r.level]}</span>` : '<span class="dot none" data-tip="未量測">·</span>';
+  const dot = (r) => r ? `<span class="dot ${r.level}${r.pending ? ' pend' : ''}" data-tip="${esc(`${r.label}：${r.value}\n${r.pending ? '暫定' : ''}${E.LEVEL_LABEL[r.level]}層｜${r.reason}${r.pending ? '\n單次量測：7 天內再量 1 次以平均判定' : ''}`)}">${r.level === 'na' ? '–' : E.LEVEL_LABEL[r.level]}</span>` : '<span class="dot none" data-tip="未量測">·</span>';
   function dueText(s) {
     if (!s.due) return '<span class="muted">—</span>';
     const d = s.daysLeft;
@@ -207,6 +219,8 @@
 
   function render() {
     if (!db) return; // 登入或解鎖畫面時沒有資料，不渲染
+    // 暫定滿 7 天仍未再量測者開案（伺服器版由伺服器處理）
+    if (!SERVER) { const n = E.expirePending(db, nowISO(), sla()); if (n) { audit('暫定到期開案', `${n} 人`); save(); } }
     index(); shell();
     const [route, arg] = (location.hash.slice(2) || 'dashboard').split('/');
     const app = $('#app');
@@ -314,15 +328,78 @@
       <span class="muted small" style="margin-left:auto">${rows.length} 案</span>
       <button class="btn sm" id="wl-export" type="button">匯出 CSV</button>
     </div>
-    ${rows.length ? `<div class="tbl-wrap"><table><thead><tr><th>層級</th><th>民眾</th><th>據點</th><th>異常項目（目前層級）</th><th>階段</th><th>下一步</th><th>期限</th><th>負責</th></tr></thead><tbody>
+    ${rows.length ? `<div class="tbl-wrap"><table><thead><tr><th>層級</th><th>民眾</th><th>據點</th><th>異常項目（目前層級）</th><th>偵測後量測</th><th>階段</th><th>下一步</th><th>期限</th><th>負責</th></tr></thead><tbody>
     ${rows.map(({ e, p, s }) => `<tr class="click" data-href="#/p/${p.id}"><td>${lv(e.level)}${e.provisional ? ' <span class="tag warn" data-tip="單次量測，需重測確認">暫定</span>' : ''}${e.emergency ? ' <span class="tag bad">急</span>' : ''}${e.cycle > 1 ? `<div class="small muted">第 ${e.cycle} 輪</div>` : ''}</td>
       <td><strong>${esc(pname(p))}</strong><div class="small muted">${esc(pid2(p))}・${p.sex === 'M' ? '男' : p.sex === 'F' ? '女' : '—'} ${E.ageAt(p.birth, new Date()) ?? '—'} 歲</div></td>
       <td class="small">${esc(p.site)}</td>
       <td class="small">${e.items.map((i) => `<span class="lv ${i.level}" style="margin:0 4px 4px 0" data-tip="${esc(`${i.value}｜${i.reason}${i.lifestyle ? '｜生活型態追蹤，不轉介' : ''}`)}">${E.ITEM_LABEL[i.key]}${i.lifestyle ? '・生活' : ''}</span>`).join('')}</td>
+      <td class="small">${afterCell(e)}</td>
       <td class="small">${E.STATE_LABEL[e.state]}</td><td class="small">${esc(s.label)}</td><td class="small">${dueText(s)}</td><td class="small">${esc(e.assignee || '未派')}</td></tr>`).join('')}
     </tbody></table></div>` : '<div class="card empty">沒有符合條件的追蹤案</div>'}
+    ${pendingSection()}
     ${(() => { const now = new Date(), w = E.recheckOverdue(db, now).map((e) => ({ e, p: IX.byPerson.get(e.personId) })).filter(({ p }) => p && inSite(p)).sort((a, b) => new Date(a.e.nextDue) - new Date(b.e.nextDue));
       return `<h2 style="margin-top:20px">待回站複測 <span class="muted small">${w.length} 人・上一輪已確認、複測日已過，請通知民眾回站量測</span></h2>${w.length ? `<div class="tbl-wrap"><table><thead><tr><th>上一輪</th><th>民眾</th><th>據點</th><th>複測日</th><th>負責</th></tr></thead><tbody>${w.map(({ e, p }) => `<tr class="click" data-href="#/p/${p.id}"><td>${lv(e.level)} <span class="small muted">第 ${e.cycle} 輪</span></td><td><strong>${esc(pname(p))}</strong><div class="small muted">${esc(pid2(p))}</div></td><td class="small">${esc(p.site)}</td><td class="small">${dueText(E.nextStep(e, now))}</td><td class="small">${esc(e.assignee || '—')}</td></tr>`).join('')}</tbody></table></div>` : '<div class="card empty">目前沒有逾期未回站的民眾</div>'}`; })()}`;
+  }
+
+  // 偵測後量測（工作清單一格）：次數＋最近 3 次數值
+  function afterCell(e) {
+    const a = IX.after(e);
+    if (!a.keys.length) return '<span class="muted">—</span>';
+    if (!a.rows.length) return '<span class="muted">尚無</span>';
+    const allGreen = a.rows.every((r) => r.parts.every((x) => x.level === 'green'));
+    return `<div>${a.rows.length} 次${allGreen ? '・<strong>皆正常</strong>' : ''}</div>` + a.rows.slice(-3).map((r) => r.parts.map((x) => `<span class="lv ${x.level}" style="margin:0 3px 3px 0" data-tip="${esc(`${fmtDT(r.at)} ${E.ITEM_LABEL[x.key]} ${x.value}`)}">${esc(String(x.value).replace(/（.*$/, ''))}</span>`).join('')).join('');
+  }
+
+  // 暫定：血壓、脈搏、血氧 7 天內只量 1 次的異常，請民眾 7 天內再量 1 次
+  function pendingSection() {
+    const now = new Date();
+    const rows = db.persons.filter((p) => p.pending && p.pending.length && inSite(p)).map((p) => {
+      const ss = IX.sessions(p.id);
+      const items = p.pending.map((x) => { const s = ss.find((y) => y.id === x.sessionId); const r = s && E.evaluateSession(ctx(p, s.at), s.readings).items[x.key]; return { x, r }; });
+      const at = p.pending.reduce((m, x) => (new Date(x.at) < new Date(m) ? x.at : m), p.pending[0].at);
+      const until = new Date(new Date(at).getTime() + E.AVG_DAYS * 86400000);
+      return { p, items, at, until, level: E.maxLevel(p.pending.map((x) => x.level)) };
+    }).sort((a, b) => E.RANK[b.level] - E.RANK[a.level] || a.until - b.until);
+    const owner = (p) => (db.settings && db.settings.siteNurse && db.settings.siteNurse[p.site]) || '—';
+    return `<h2 style="margin-top:20px">暫定・待 7 天內再量 <span class="muted small">${rows.length} 人・血壓、脈搏、血氧單次異常（非紅層）先不開案；7 天內再量 1 次以平均判定，未再量測則到期自動開案</span></h2>
+    ${rows.length ? `<div class="tbl-wrap"><table><thead><tr><th>暫定層級</th><th>民眾</th><th>據點</th><th>項目</th><th>量測日</th><th>再量期限</th><th>負責</th></tr></thead><tbody>${rows.map(({ p, items, at, until, level }) => `<tr class="click" data-href="#/p/${p.id}"><td><span class="lv ${level} pend">${E.LEVEL_LABEL[level]}</span></td><td><strong>${esc(pname(p))}</strong><div class="small muted">${esc(pid2(p))}</div></td><td class="small">${esc(p.site)}</td><td class="small">${items.map(({ x, r }) => `${E.ITEM_LABEL[x.key]} ${esc(r ? r.value : '')}`).join('；')}</td><td class="small tnum">${fmtD(at)}</td><td class="small tnum">${fmtD(until.toISOString())}${until < now ? ' <span class="overdue">今日開案</span>' : ''}</td><td class="small">${esc(owner(p))}</td></tr>`).join('')}</tbody></table></div>` : '<div class="card empty">目前沒有暫定待再量的民眾</div>'}`;
+  }
+
+  // 偵測後量測的小趨勢線（血壓：收縮壓實線、舒張壓虛線；含開案時的量測）
+  function sparkline(ep) {
+    const a = IX.after(ep);
+    const k = a.keys[0];
+    if (!k) return '';
+    const p = IX.byPerson.get(ep.personId), ss = IX.sessions(ep.personId);
+    const basis = ep.basisSessionIds || [ep.levelSessionId || ep.detectSessionId];
+    const first = ss.filter((s) => basis.includes(s.id));
+    const pts = first.concat(ss.filter((s) => a.rows.some((r) => r.at === s.at))).map((s) => ({ at: s.at, v: E.sessionValue(k, s.readings) })).filter((x) => x.v);
+    if (pts.length < 2) return '';
+    const th = { bp: [140, 160, 180], pulse: [50, 100, 120], spo2: [90, 94] }[k];
+    const data = pts.flatMap((x) => x.v);
+    const near = th.filter((t) => t >= Math.min(...data) - 10 && t <= Math.max(...data) + 10);
+    const shown = near.length ? near : [th.reduce((m, t) => (Math.abs(t - data[0]) < Math.abs(m - data[0]) ? t : m), th[0])];
+    const vals = data.concat(shown);
+    const lo = Math.min(...vals) - 5, hi = Math.max(...vals) + 5;
+    const W = 360, H = 72, L = 26, R = 6, T = 6, B = 6;
+    const X = (i) => L + (pts.length === 1 ? 0 : (i * (W - L - R)) / (pts.length - 1));
+    const Y = (v) => T + ((hi - v) * (H - T - B)) / (hi - lo);
+    const line = (j) => pts.map((x, i) => `${X(i).toFixed(1)},${Y(x.v[j]).toFixed(1)}`).join(' ');
+    return `<svg class="spark" viewBox="0 0 ${W} ${H}" role="img" aria-label="${E.ITEM_LABEL[k]}偵測後趨勢">
+      ${shown.map((t) => `<line class="th" x1="${L}" x2="${W - R}" y1="${Y(t).toFixed(1)}" y2="${Y(t).toFixed(1)}"/><text x="2" y="${(Y(t) + 3).toFixed(1)}">${t}</text>`).join('')}
+      <line class="bl" x1="${X(first.length - 1).toFixed(1)}" x2="${X(first.length - 1).toFixed(1)}" y1="${T}" y2="${H - B}"/>
+      <polyline class="ln" points="${line(0)}"/>${k === 'bp' ? `<polyline class="ln2" points="${line(1)}"/>` : ''}
+      ${pts.map((x, i) => `<circle cx="${X(i).toFixed(1)}" cy="${Y(x.v[0]).toFixed(1)}" r="3" fill="var(--lv-${E.evaluateSession(ctx(p, x.at), ss.find((s) => s.at === x.at).readings).items[k].level})"><title>${fmtDT(x.at)} ${x.v.join('/')}</title></circle>`).join('')}
+    </svg>`;
+  }
+
+  function afterBlock(ep) {
+    const a = IX.after(ep);
+    if (!a.keys.length) return '';
+    const auto = a.only && ep.state === 'detected' && !ep.notify && ep.level !== 'red';
+    return `<div style="margin:6px 0 10px"><h3 style="margin-bottom:4px">偵測後量測 <span class="small muted">${a.rows.length ? `${a.rows.length} 次` : '尚無'}</span></h3>
+      ${a.rows.length ? `<div class="chips">${a.rows.map((r) => `<span class="small tnum" style="margin-right:6px">${fmtD(r.at)} ${r.parts.map((x) => `<span class="lv ${x.level}">${esc(String(x.value).replace(/（.*$/, ''))}</span>`).join(' ')}</span>`).join('')}</div>${sparkline(ep)}` : ''}
+      ${auto ? '<p class="small muted" style="margin:4px 0 0">尚未通知前，若之後連續 2 次量測都正常（且 7 天平均也正常），系統會自動結案。</p>' : ''}</div>`;
   }
 
   // ───────────── 民眾名冊 ─────────────
@@ -354,7 +431,7 @@
     const past = db.episodes.filter((e) => e.personId === id && !E.isOpen(e)).sort((a, b) => new Date(b.detectedAt) - new Date(a.detectedAt));
     const lastEp = IX.last.get(id);
     const sessions = IX.sessions(id);
-    const evs = sessions.map((s) => ({ s, ev: E.evaluateSession(ctx(p, s.at), s.readings) }));
+    const evs = E.evaluateTimeline(p, sessions, now);
     const age = E.ageAt(p.birth, now);
     const flags = [['chronic', '慢性病'], ['immuno', '免疫低下'], ['copd', '慢性肺病'], ['medHTN', '服降壓藥'], ['medDM', '服降糖藥'], ['medLipid', '服降脂藥']];
 
@@ -373,7 +450,7 @@
           <p class="small muted" style="margin:4px 0 0">只開健康處方，不派案、不轉介，也不計入整體層級。${ep ? '已併入目前追蹤案的健康處方。' : ''}</p></div>` : ''}
         <div class="card"><div class="row spread"><h2>最近一次量測判定</h2><span class="small muted">${l ? fmtDT(l.session.at) + (l.session.readings.length > 1 ? `・含 ${l.session.readings.length - 1} 次重測` : '') : ''}</span></div>
           ${l ? `<div class="tbl-wrap"><table><thead><tr><th>項目</th><th>數值</th><th>層級</th><th>判定依據</th><th>處理建議</th></tr></thead><tbody>
-          ${E.ITEMS.map((it) => { const r = l.ev.items[it.key]; return r ? `<tr><td>${it.label}</td><td class="tnum">${esc(r.value)}</td><td>${lv(r.level)}${r.provisional ? ' <span class="tag warn">暫定</span>' : ''}${r.lifestyle ? ' <span class="tag" data-tip="生活型態追蹤：不計入整體層級、不轉介">生活型態</span>' : ''}</td><td class="small">${esc(r.reason)}${r.notes.length ? `<div class="small" style="color:var(--warn-ink)">${r.notes.map(esc).join('<br>')}</div>` : ''}</td><td class="small">${r.actions.map(esc).join('、')}</td></tr>` : `<tr><td>${it.label}</td><td colspan="4" class="muted small">本次未量測</td></tr>`; }).join('')}
+          ${E.ITEMS.map((it) => { const r = l.ev.items[it.key]; return r ? `<tr><td>${it.label}</td><td class="tnum">${esc(r.value)}</td><td>${lv(r.level)}${r.provisional || r.pending ? ' <span class="tag warn">暫定</span>' : ''}${r.avg ? ` <span class="tag" data-tip="${esc(`本次 ${r.avg.raw}（${E.LEVEL_LABEL[r.avg.rawLevel]}）`)}">7 天平均</span>` : ''}${r.lifestyle ? ' <span class="tag" data-tip="生活型態追蹤：不計入整體層級、不轉介">生活型態</span>' : ''}</td><td class="small">${esc(r.reason)}${r.notes.length ? `<div class="small" style="color:var(--warn-ink)">${r.notes.map(esc).join('<br>')}</div>` : ''}</td><td class="small">${r.actions.map(esc).join('、')}</td></tr>` : `<tr><td>${it.label}</td><td colspan="4" class="muted small">本次未量測</td></tr>`; }).join('')}
           </tbody></table></div>${l.ev.symptoms.length ? `<p class="small">回報症狀：${l.ev.symptoms.map((s) => E.SYMPTOMS[s] || s).join('、')}</p>` : ''}` : '<div class="empty">尚無量測資料</div>'}
         </div>
         <div class="card"><h2>趨勢</h2><p class="small muted" style="margin-top:-6px">點的顏色為該次量測的層級；虛線為分層閾值。滑過可看數值。</p>
@@ -431,7 +508,10 @@
         <p class="small muted" style="margin:0">民眾回站量測後，系統自動判斷：升高立即開始下一輪；複測日後仍異常則開始下一輪（最近 2 次量測取較高者）；連續 2 次綠層則回到例行量測。</p></div>
         <div class="row" style="margin-top:10px"><button class="btn" type="button" id="add-m2">登錄複測量測</button></div></div>`;
     }
-    return `<div class="card"><h2>追蹤狀態</h2><p>${lv(l ? (l.ev.overall === 'na' ? 'na' : l.ev.overall) : 'na')} 目前沒有進行中的追蹤。${l && E.RANK[l.ev.overall] <= 0 ? '回饋與例行量測即可。' : ''}</p></div>`;
+    const pend = p.pending && p.pending.length ? p.pending : null;
+    const until = pend ? new Date(new Date(pend.reduce((m, x) => (new Date(x.at) < new Date(m) ? x.at : m), pend[0].at)).getTime() + E.AVG_DAYS * 86400000) : null;
+    return `<div class="card"${pend ? ` style="border-left:4px dashed var(--lv-${E.maxLevel(pend.map((x) => x.level))})"` : ''}><h2>追蹤狀態</h2><p>${lv(l ? (l.ev.overall === 'na' ? 'na' : l.ev.overall) : 'na')} 目前沒有進行中的追蹤。${l && E.RANK[l.ev.overall] <= 0 && !pend ? '回饋與例行量測即可。' : ''}</p>
+      ${pend ? `<p class="small"><span class="tag warn">暫定</span> ${pend.map((x) => `${E.ITEM_LABEL[x.key]}${E.LEVEL_LABEL[x.level]}層`).join('、')}（單次量測）。請民眾在 <strong>${fmtD(until.toISOString())}</strong> 前再量 1 次，以 7 天平均判定；未再量測則到期自動開案。</p>` : ''}</div>`;
   }
 
   function episodeCard(p, ep, now) {
@@ -458,7 +538,8 @@
     return `<div class="card" style="border-left:4px solid var(--lv-${ep.level})">
       <div class="row spread"><h2 style="margin:0">${lv(ep.level)} 追蹤中・第 ${ep.cycle} 輪${ep.provisional ? ' <span class="tag warn">暫定，需重測確認</span>' : ''}</h2><span class="small muted">偵測 ${fmtDT(ep.detectedAt)}・負責 ${esc(ep.assignee || '未指定')}</span></div>
       <p class="small" style="margin:6px 0">${esc(E.LEVEL_MEANING[ep.level])}</p>
-      <div class="chips" style="margin-bottom:8px">${ep.items.map((i) => `<span class="lv ${i.level}" data-tip="${esc(i.reason)}">${E.ITEM_LABEL[i.key]} ${esc(i.value)}</span>`).join('')}</div>
+      <div class="chips" style="margin-bottom:8px">${ep.items.map((i) => `<span class="lv ${i.level}${i.pending ? ' pend' : ''}" data-tip="${esc(i.reason)}">${E.ITEM_LABEL[i.key]} ${esc(i.value)}</span>`).join('')}</div>
+      ${afterBlock(ep)}
       ${stepper(ep.state)}
       <div class="grid g2" style="margin-top:10px">
         <div><h3>下一步：${esc(s.label)}</h3><div class="small">${dueText(s)}</div></div>
@@ -496,12 +577,16 @@
       if (Object.keys(m).length <= 5 && !m.arr) throw new Error('請至少輸入一項數值');
       const bad = E.validateMeasurement(m); if (bad.length) throw new Error(bad.join('；'));
       if ((m.sbp === undefined) !== (m.dbp === undefined)) throw new Error('血壓請同時輸入收縮壓與舒張壓');
-      if (SERVER) { srv(api(`persons/${p.id}/measurements`, { m }), (j) => `已判定：${E.LEVEL_LABEL[j.overall]}層${j.emergency ? '，有警示症狀請立即處理' : ''}`); return; }
+      if (SERVER) { srv(api(`persons/${p.id}/measurements`, { m }), (j) => judged(j.overall, j.emergency, j.pending, j.pendingLevel)); return; }
       db.measurements.push(m);
       const r = E.ingest(db, p.id, m.at, sla());
       save(); render();
-      toast(`已判定：${E.LEVEL_LABEL[r.ev.overall]}層${r.ev.emergency ? '，有警示症狀請立即處理' : ''}`);
+      toast(judged(r.ev.overall, r.ev.emergency, r.ev.pending, r.ev.pendingLevel));
     } }]);
+  }
+  function judged(overall, emergency, pending, pendingLevel) {
+    const pend = pending && pending.length ? `；${pending.map((k) => E.ITEM_LABEL[k]).join('、')}單次量測暫定${E.LEVEL_LABEL[pendingLevel]}層，請 7 天內再量 1 次` : '';
+    return `已判定：${E.LEVEL_LABEL[overall]}層${pend}${emergency ? '，有警示症狀請立即處理' : ''}`;
   }
 
   function printRx(p, ep, txt) {

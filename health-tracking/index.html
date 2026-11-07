@@ -87,6 +87,14 @@ h3 { font-size: 14px; margin: 0 0 8px; color: var(--ink-2); }
 .lv.na { --c: var(--lv-na); background: var(--surface-2); color: var(--ink-3); }
 .dot { display: inline-block; width: 18px; height: 18px; border-radius: 5px; font-size: 10px; line-height: 18px; text-align: center; font-weight: 700; color: #fff; }
 .dot.green { background: var(--lv-green); } .dot.yellow { background: var(--lv-yellow); color: #3a3000; } .dot.orange { background: var(--lv-orange); } .dot.red { background: var(--lv-red); } .dot.na, .dot.none { background: var(--surface-2); color: var(--ink-3); }
+.dot.pend { opacity: .55; outline: 2px dashed var(--ink-3); outline-offset: 1px; }
+.lv.pend { opacity: .7; border-style: dashed; }
+.spark { display: block; width: 100%; max-width: 360px; height: 72px; }
+.spark .th { stroke: var(--ink-3); stroke-dasharray: 3 3; stroke-width: 1; opacity: .6; }
+.spark .ln { fill: none; stroke: var(--ink-2); stroke-width: 1.5; }
+.spark .ln2 { fill: none; stroke: var(--ink-3); stroke-width: 1.2; stroke-dasharray: 4 2; }
+.spark text { font-size: 9px; fill: var(--ink-3); }
+.spark .bl { stroke: var(--ink-3); stroke-width: 1; }
 .tag { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 11px; background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--line); white-space: nowrap; }
 .tag.warn { background: var(--warn-bg); color: var(--warn-ink); border-color: transparent; }
 .tag.bad { background: var(--lv-red-bg); color: var(--lv-red-ink); border-color: transparent; font-weight: 700; }

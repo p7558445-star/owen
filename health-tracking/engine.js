@@ -60,6 +60,8 @@
     '代謝症候群的血糖判準僅用空腹血糖；已服藥者該項視為符合。',
     '代謝症候群五項未量齊且已符合項數 <3 時，標示為「資料不足」或「至少黃」，不判綠。',
     '單次量測達紅層（血壓、心律、血氧）或需重測確認的橙層（心律、低體溫），先以「暫定」層級派案，不因等待重測而延誤；同一場次 60 分鐘內的重測會自動重新判定。',
+    '血壓、脈搏、血氧的黃、橙層以 7 天內至少 2 個場次的平均判定（院內決議 2026/11）；7 天內只量 1 次者標「暫定」、不開案，7 天內未再量測則以該次開案。紅層、有症狀、心律 ARR 旗標、現場重測 3 次的血氧仍單次即判定。',
+    '「偵測」階段尚未通知、非紅層、只因血壓／脈搏／血氧異常的輪次，之後連續 2 個場次全部正常且 7 天平均也正常，系統自動結案（原因：後續量測連續 2 次正常）。',
     '脈搏 50–59 但有症狀：文件僅定義無症狀為黃，本系統升為橙。',
     '血糖 <70 但無症狀或未用藥：文件未定義，本系統暫列橙（需醫師評估），並提示補充糖分。',
     '血糖「飯後」閾值同時套用於「隨機」血糖。',
@@ -73,7 +75,7 @@
 
   // 處理時限（天），可由設定覆寫
   // 分層規則版本：閾值或計入整體層級的規則有變動時更新，後台據此提示重新判定開放中的追蹤案
-  const RULES_VERSION = '2026-11-02';
+  const RULES_VERSION = '2026-11-07';
   const REGRADE_CLOSE = '規則更新後重新判定為綠層';
 
   const DEFAULT_SLA = {
@@ -346,7 +348,7 @@
    * @param person {sex:'M'|'F', age, heightCm, copd, spo2Baseline, immuno, chronic, medHTN, medDM, medLipid}
    * @param readings 同一場次內依時間排序的量測紀錄
    */
-  function evaluateSession(person, readings) {
+  function evaluateSession(person, readings, history) {
     const sx = [...new Set(readings.flatMap((r) => r.symptoms || []))];
     const items = {};
     for (const it of ITEMS) {
@@ -355,18 +357,132 @@
     }
     for (const k of LIFESTYLE) if (items[k]) items[k].lifestyle = true;
     for (const k of Object.keys(items)) items[k].data = itemData(k, readings, items[k]);
+    for (const k of SMOOTH) smoothItem(items, k, readings, sx, person, history);
+    smoothMetS(items, readings, sx, person, history);
+    return summarizeEval(items, sx);
+  }
+
+  // 由各項目結果算整體層級；「暫定」（7 天內只量 1 次）的項目不計入整體層級、不開案
+  function summarizeEval(items, sx) {
     const graded = Object.values(items).filter((r) => r.level !== 'na' && !r.lifestyle);
+    const firm = graded.filter((r) => !r.pending);
+    const pend = graded.filter((r) => r.pending && RANK[r.level] >= 1);
     const life = Object.values(items).filter((r) => r.level !== 'na' && r.lifestyle);
-    const overall = graded.length ? maxLevel(graded.map((r) => r.level)) : 'na';
+    const overall = firm.length ? maxLevel(firm.map((r) => r.level)) : 'na';
     return {
       overall,
       lifestyle: life.length ? maxLevel(life.map((r) => r.level)) : 'na',
       items,
       symptoms: sx,
-      emergency: graded.some((r) => r.emergency),
-      provisional: graded.some((r) => r.provisional && r.level === overall),
-      abnormal: graded.filter((r) => RANK[r.level] >= 1).map((r) => r.key),
+      emergency: firm.some((r) => r.emergency),
+      provisional: firm.some((r) => r.provisional && r.level === overall),
+      abnormal: firm.filter((r) => RANK[r.level] >= 1).map((r) => r.key),
+      pending: pend.map((r) => r.key),
+      pendingLevel: pend.length ? maxLevel(pend.map((r) => r.level)) : null,
     };
+  }
+
+  // ───────────────────────── 血壓、脈搏、血氧：7 天平均 ─────────────────────────
+  // 單次量測受情境影響大（個人內收縮壓變異 SD 約 11 mmHg），社區民眾又常頻繁量血壓。
+  // 黃、橙層改以「7 天內至少 2 個場次」的平均判定；只量 1 次時先標「暫定」、不開案，
+  // 7 天內未再量測則以該次量測開案。以下單次即判定、不平均：紅層、有症狀、心律 ARR 旗標、現場已重測 3 次的血氧。
+  const SMOOTH = ['bp', 'pulse', 'spo2'];
+  const AVG_DAYS = 7;
+  const AVG_MS = AVG_DAYS * 86400000;
+  const AUTO_CLOSE = '後續量測連續 2 次正常';
+
+  // 一個場次的代表值（與單次判定相同：場次內最後一筆）
+  function sessionValue(key, rs) {
+    const last = (f) => { const v = series(rs, f); return v.length ? v[v.length - 1] : null; };
+    if (key === 'bp' || key === 'mets') { const a = last('sbp'), b = last('dbp'); return a === null || b === null ? null : [a, b]; }
+    const x = last(key === 'pulse' ? 'pulse' : 'spo2');
+    return x === null ? null : [x];
+  }
+  const hasArr = (rs) => rs.some((r) => r.arr === true || r.arr === 'Y' || r.arr === 1);
+
+  function smoothItem(items, key, readings, sx, person, history) {
+    const r = items[key];
+    if (!r || r.level === 'na' || r.level === 'red' || r.emergency) return;
+    if (key === 'pulse' && hasArr(readings)) return;
+    if (key === 'spo2' && r.level === 'orange' && series(readings, 'spo2').length >= 3) return;
+    const cur = sessionValue(key, readings);
+    if (!cur) return;
+    const t0 = new Date(readings[0].at);
+    const prev = (history || []).filter((h) => { const d = t0 - new Date(h.at); return d > 0 && d < AVG_MS; })
+      .map((h) => sessionValue(key, h.readings)).filter(Boolean);
+    if (!prev.length) {
+      if (RANK[r.level] >= 1) {
+        r.pending = true;
+        r.notes.push(`單次量測，暫定${LEVEL_LABEL[r.level]}層：7 天內再量 1 次，以平均判定；7 天內未再量測，則以本次量測開案`);
+      }
+      return;
+    }
+    const all = [...prev, cur], n = all.length;
+    const mean = cur.map((_, j) => Math.round((all.reduce((a, v) => a + v[j], 0) / n) * 10) / 10);
+    const synth = key === 'bp' ? [{ sbp: mean[0], dbp: mean[1] }] : key === 'pulse' ? [{ pulse: mean[0] }] : [{ spo2: mean[0] }];
+    const r2 = EVALUATORS[key](synth, sx, person);
+    const show = mean.map((v) => fmt(v, 1)).join('/');
+    items[key] = Object.assign(r2, {
+      value: `${show}（7 天 ${n} 次平均）`,
+      reason: `7 天內 ${n} 次平均：${r2.reason}`,
+      provisional: false, emergency: false, timing: {},
+      notes: [`本次 ${r.value}（單次為${LEVEL_LABEL[r.level]}層）`],
+      avg: { n, mean, raw: r.value, rawLevel: r.level },
+      data: key === 'bp' ? { sbp: mean[0], dbp: mean[1] } : key === 'pulse' ? { hr: mean[0] } : { x: mean[0] },
+      lifestyle: r.lifestyle,
+    });
+  }
+
+  // 代謝症候群的血壓條件與血壓同一套：7 天內有 2 次以上用平均；只量 1 次且層級取決於這次血壓時，代謝症候群也是暫定
+  function smoothMetS(items, readings, sx, person, history) {
+    const m = items.mets, b = items.bp;
+    if (!m || !b || m.level === 'na') return;
+    if (b.avg) {
+      const r2 = evalMetS([...readings, { sbp: b.avg.mean[0], dbp: b.avg.mean[1] }], sx, person);
+      if (r2) items.mets = Object.assign(r2, { data: itemData('mets', readings, r2), notes: r2.notes.concat(['血壓條件以 7 天平均判定']) });
+      return;
+    }
+    if (b.level === 'red' || b.emergency) return;
+    const t0 = new Date(readings[0].at);
+    const prior = (history || []).some((h) => { const d = t0 - new Date(h.at); return d > 0 && d < AVG_MS && sessionValue('bp', h.readings); });
+    if (prior) return;
+    const noBp = evalMetS(readings.map((r) => Object.assign({}, r, { sbp: null, dbp: null })), sx, person);
+    if (RANK[m.level] >= 1 && RANK[m.level] > RANK[noBp ? noBp.level : 'na']) {
+      m.pending = true;
+      m.notes.push(`血壓條件只量 1 次，暫定${LEVEL_LABEL[m.level]}層：7 天內再量 1 次血壓，以平均判定；7 天內未再量測，則以本次開案`);
+    }
+  }
+
+  // 暫定項目轉為正式（7 天內未再量測，或已開案的場次）
+  function promote(ev, keys) {
+    for (const k of keys || ev.pending) {
+      const r = ev.items[k];
+      if (!r || !r.pending) continue;
+      r.pending = false; r.expired = true;
+      r.notes.push('7 天內未再量測，以單次量測判定');
+    }
+    return summarizeEval(ev.items, ev.symptoms);
+  }
+
+  // 第 i 個場次的判定（含前 7 天的場次平均）
+  function evalAt(person, sessions, i) {
+    const s = sessions[i];
+    return evaluateSession(personCtx(person, s.at), s.readings, sessions.slice(Math.max(0, i - 40), i));
+  }
+
+  // 全部場次的判定：暫定項目 7 天內有再量到同項目 → 交由下一次平均；7 天已過仍未再量 → 以單次量測判定
+  function evaluateTimeline(person, sessions, now) {
+    const t = new Date(now || Date.now());
+    return sessions.map((s, i) => {
+      let ev = evalAt(person, sessions, i);
+      if (ev.pending.length) {
+        const t0 = new Date(s.at);
+        const later = sessions.slice(i + 1).filter((x) => new Date(x.at) - t0 < AVG_MS);
+        const keys = ev.pending.filter((k) => !later.some((x) => sessionValue(k, x.readings)));
+        if (keys.length && t - t0 >= AVG_MS) ev = promote(ev, keys);
+      }
+      return { s, ev };
+    });
   }
 
   // ───────────────────────── 場次分組 ─────────────────────────
@@ -430,7 +546,7 @@
   function log(ep, at, type, text, by) { ep.log.push({ at, type, text, by: by || '系統' }); }
 
   function summarizeItems(ev) {
-    return Object.values(ev.items).filter((r) => RANK[r.level] >= 1).map((r) => ({ key: r.key, level: r.level, value: r.value, reason: r.reason, provisional: r.provisional, timing: r.lifestyle ? {} : r.timing, lifestyle: !!r.lifestyle, data: r.data }));
+    return Object.values(ev.items).filter((r) => RANK[r.level] >= 1).map((r) => ({ key: r.key, level: r.level, value: r.value, reason: r.reason, provisional: r.provisional, pending: !!r.pending, avg: r.avg || undefined, timing: r.lifestyle ? {} : r.timing, lifestyle: !!r.lifestyle, data: r.data }));
   }
 
   function newEpisode(db, person, session, ev, at, sla, level, why, basis) {
@@ -482,9 +598,10 @@
       if (!person) continue;
       // 決定本輪層級的量測：開案／升級時的場次；複測開輪則為「最近 2 次」
       const ids = ep.basisSessionIds || [ep.levelSessionId || ep.detectSessionId];
-      const ss = sessionsOf(db, ep.personId, sla).filter((x) => ids.includes(x.id));
-      if (!ss.length) continue;
-      const ev = ss.map((x) => evaluateSession(personCtx(person, x.at), x.readings)).reduce((a, b) => (RANK[b.overall] > RANK[a.overall] ? b : a));
+      const all = sessionsOf(db, ep.personId, sla);
+      const idx = all.map((x, i) => (ids.includes(x.id) ? i : -1)).filter((i) => i >= 0);
+      if (!idx.length) continue;
+      const ev = idx.map((i) => promote(evalAt(person, all, i))).reduce((a, b) => (RANK[b.overall] > RANK[a.overall] ? b : a));
       const prev = ep.level;
       const items = summarizeItems(ev);
       if (RANK[ev.overall] <= 0) {
@@ -495,6 +612,11 @@
         continue;
       }
       const sameItems = JSON.stringify(items.map((i) => i.key + i.level)) === JSON.stringify(ep.items.map((i) => i.key + i.level));
+      // 尚未有人處理、後續已連續 2 次正常：依新規則系統結案
+      if (ev.overall === prev && autoClose(ep, person, all, evalAt(person, all, all.length - 1), at, by)) {
+        changes.push({ id: ep.id, personId: ep.personId, from: prev, to: 'green' });
+        continue;
+      }
       if (ev.overall === prev && sameItems) continue;
       ep.items = items; ep.emergency = ev.emergency; ep.provisional = ev.provisional;
       if (ev.overall !== prev) {
@@ -517,19 +639,102 @@
     const sla = Object.assign({}, DEFAULT_SLA, slaOverride || {});
     const person = db.persons.find((p) => p.id === personId);
     const sessions = sessionsOf(db, personId, sla);
-    const session = sessions[sessions.length - 1];
+    const idx = sessions.length - 1;
+    const session = sessions[idx];
     if (!session) return null;
-    const ev = evaluateSession(personCtx(person, session.at), session.readings);
+    const at = now || new Date().toISOString();
+    // 先前的暫定項目：本次已超過 7 天 → 以該次量測開案；7 天內又量到同項目 → 交由本次平均判定
+    if (person.pending && person.pending.length) {
+      const t0 = new Date(session.at);
+      const old = person.pending.filter((x) => x.sessionId !== session.id);
+      const expired = old.filter((x) => t0 - new Date(x.at) >= AVG_MS);
+      if (expired.length) settlePending(db, person, sessions, expired, at, sla);
+      person.pending = old.filter((x) => !expired.includes(x) && !sessionValue(x.key, session.readings));
+    }
+    const ev = evalAt(person, sessions, idx);
     person.lastLevel = ev.overall;
     person.lastSessionAt = session.at;
+    const res = decide(db, person, sessions, idx, ev, at, sla);
+    if (ev.pending.length) {
+      const ep = openEpisode(db, personId);
+      if (!(ep && RANK[ep.level] >= RANK[ev.pendingLevel])) {
+        person.pending = (person.pending || []).concat(ev.pending.map((k) => ({ key: k, level: ev.items[k].level, sessionId: session.id, at: session.at })));
+      }
+    }
+    if (person.pending && !person.pending.length) delete person.pending;
+    return res;
+  }
+
+  // 暫定項目 7 天內未再量測：以該次量測（轉為正式）依一般規則開案或升級
+  function settlePending(db, person, sessions, entries, at, sla) {
+    const bySession = new Map();
+    for (const x of entries) { if (!bySession.has(x.sessionId)) bySession.set(x.sessionId, []); bySession.get(x.sessionId).push(x.key); }
+    for (const [sid, keys] of bySession) {
+      const i = sessions.findIndex((s) => s.id === sid);
+      if (i < 0) continue;
+      const ev = promote(evalAt(person, sessions, i), keys);
+      decide(db, person, sessions.slice(0, i + 1), i, ev, at, sla, '7 天內未再量測，以單次量測開案');
+    }
+  }
+
+  // 每日（或匯入、開啟系統時）檢查：暫定滿 7 天仍未再量測者開案。回傳處理的民眾數
+  function expirePending(db, now, slaOverride) {
+    const sla = Object.assign({}, DEFAULT_SLA, slaOverride || {});
     const at = now || new Date().toISOString();
+    const t = new Date(at);
+    let n = 0;
+    for (const p of db.persons) {
+      if (!p.pending || !p.pending.length) continue;
+      const ex = p.pending.filter((x) => t - new Date(x.at) >= AVG_MS);
+      if (!ex.length) continue;
+      settlePending(db, p, sessionsOf(db, p.id, sla), ex, at, sla);
+      p.pending = p.pending.filter((x) => !ex.includes(x));
+      if (!p.pending.length) delete p.pending;
+      n++;
+    }
+    return n;
+  }
+
+  // 「偵測」階段尚未有人處理、非紅層、只因血壓／脈搏／血氧異常的輪次：
+  // 之後連續 2 個場次（含這些項目）全部正常、且目前 7 天平均也正常 → 系統結案
+  function autoClose(ep, person, sessions, ev, at, by) {
+    if (ep.state !== 'detected' || ep.notify || ep.level === 'red' || ev.overall !== 'green' || ev.pending.length) return false;
+    const { keys, only } = vitalKeys(ep);
+    if (!only) return false;
+    const basis = ep.basisSessionIds || [ep.levelSessionId || ep.detectSessionId];
+    const basisAt = sessions.filter((s) => basis.includes(s.id)).reduce((m, s) => (new Date(s.at) > new Date(m) ? s.at : m), ep.detectedAt);
+    const last2 = sessions.filter((s) => new Date(s.at) > new Date(basisAt) && keys.some((k) => sessionValue(k, s.readings))).slice(-2);
+    if (last2.length < 2) return false;
+    const raw = last2.map((s) => evaluateSession(personCtx(person, s.at), s.readings));
+    const ok = raw.every((e) => keys.every((k) => e.items[k] && e.items[k].level === 'green') && Object.values(e.items).every((r) => r.lifestyle || r.level === 'na' || r.level === 'green'));
+    if (!ok) return false;
+    const vals = raw.map((e) => keys.map((k) => e.items[k].value).join('、')).join('；');
+    log(ep, at, 'closed', `${AUTO_CLOSE}（${vals}），未及通知即由系統結案（原 ${LEVEL_LABEL[ep.level]}層）`, by);
+    ep.state = 'closed';
+    ep.close = { at, reason: AUTO_CLOSE, by: '系統' };
+    return true;
+  }
+
+  // 輪次中的血壓、脈搏、血氧異常項目；only＝本輪只因這些項目（含只因血壓條件而符合 1–2 項的代謝症候群）
+  function vitalKeys(ep) {
+    const abn = ep.items.filter((i) => !i.lifestyle && RANK[i.level] >= 1);
+    const bpOnlyMetS = (i) => i.key === 'mets' && /：血壓$/.test(i.reason || '');
+    const keys = [...new Set(abn.map((i) => (bpOnlyMetS(i) ? 'bp' : i.key)).filter((k) => SMOOTH.includes(k)))];
+    return { keys, only: abn.length > 0 && abn.every((i) => SMOOTH.includes(i.key) || bpOnlyMetS(i)) };
+  }
+
+  // 依一個場次的判定決定開案、升級、結案或只記錄
+  function decide(db, person, sessions, idx, ev, at, sla, why) {
+    const personId = person.id;
+    const session = sessions[idx];
     let ep = openEpisode(db, personId);
 
     if (ep) {
       const sameSession = ep.sessions.includes(session.id) || ep.detectSessionId === session.id;
       if (!sameSession) ep.sessions.push(session.id);
-      // 同一場次內的重測：直接以最新判定取代（重測正常可回綠）
+      // 同一場次內的重測：直接以最新判定取代（重測正常可回綠）；本場次已開案，暫定項目一併計入
       if (sameSession && ['detected', 'notified'].includes(ep.state)) {
+        if (ev.pending.length) ev = promote(ev);
         if (ev.overall !== ep.level) {
           const prev = ep.level;
           if (RANK[ev.overall] <= 0) {
@@ -539,7 +744,7 @@
             return { ev, episode: ep };
           }
           ep.level = ev.overall; ep.levelAt = at; ep.levelSessionId = session.id; ep.basisSessionIds = [session.id];
-          log(ep, at, RANK[ev.overall] > RANK[prev] ? 'upgraded' : 'regraded', `同場次重測：${LEVEL_LABEL[prev]} → ${LEVEL_LABEL[ev.overall]}`);
+          log(ep, at, RANK[ev.overall] > RANK[prev] ? 'upgraded' : 'regraded', `${why ? why + '：' : '同場次重測：'}${LEVEL_LABEL[prev]} → ${LEVEL_LABEL[ev.overall]}`);
         }
         ep.items = summarizeItems(ev); ep.emergency = ev.emergency; ep.provisional = ev.provisional;
         ep.due = computeDue(ep, sla, ep.items);
@@ -552,40 +757,52 @@
         ep.state = 'detected';
         ep.due = computeDue(ep, sla, ep.items);
         delete ep.notify; delete ep.intervene;
-        log(ep, at, 'upgraded', `新量測升級：${LEVEL_LABEL[prev]} → ${LEVEL_LABEL[ev.overall]}，回到偵測、重新通知`);
+        log(ep, at, 'upgraded', `${why ? why + '，' : '新量測'}升級：${LEVEL_LABEL[prev]} → ${LEVEL_LABEL[ev.overall]}，回到偵測、重新通知`);
         return { ev, episode: ep };
       }
-      log(ep, at, 'measured', `新量測（${LEVEL_LABEL[ev.overall]}層）`);
+      if (autoClose(ep, person, sessions, ev, at)) return { ev, episode: ep };
+      log(ep, at, 'measured', `新量測（${measuredText(ev)}）`);
       return { ev, episode: ep };
     }
 
     // 沒有進行中的輪次
     const last = lastEpisode(db, personId);
     if (!last || last.state !== 'confirmed') {
-      if (RANK[ev.overall] >= 1) ep = newEpisode(db, person, session, ev, at, sla);
+      if (RANK[ev.overall] >= 1) ep = newEpisode(db, person, session, ev, at, sla, null, why);
       return { ev, episode: ep };
     }
     // 上一輪已確認：升高立即開新輪；到複測日後回站則依最近 2 次量測決定
     if (RANK[ev.overall] > RANK[last.level]) {
       last.recheck = last.recheck || { at: session.at, level: ev.overall, kind: 'upgrade' };
-      ep = newEpisode(db, person, session, ev, at, sla, ev.overall, `高於上一輪（${LEVEL_LABEL[last.level]}），開新一輪`);
+      ep = newEpisode(db, person, session, ev, at, sla, ev.overall, `${why ? why + '；' : ''}高於上一輪（${LEVEL_LABEL[last.level]}），開新一輪`);
       return { ev, episode: ep };
     }
     if (last.nextDue && new Date(session.at) >= startOfDay(last.nextDue)) {
-      const recent = sessions.slice(-2).map((s) => evaluateSession(personCtx(person, s.at), s.readings).overall).filter((l) => l !== 'na');
+      // 複測量到暫定異常：等 7 天內再量 1 次（或 7 天後以本次）再判定
+      if (ev.pending.length && RANK[ev.pendingLevel] > Math.max(0, RANK[ev.overall])) {
+        log(last, at, 'measured', `複測量測（${measuredText(ev)}），待 7 天內再量 1 次判定`);
+        return { ev, episode: last };
+      }
+      // 前一次：已併入本次 7 天平均的暫定量測不重複計算；超過 7 天未再量的暫定量測以單次判定
+      const prevEv = idx > 0 ? evaluateTimeline(person, sessions.slice(0, idx + 1), session.at)[idx - 1].ev : null;
+      const recent = [prevEv && prevEv.overall, ev.overall].filter((l) => l && l !== 'na');
       const lv = recent.length ? maxLevel(recent) : ev.overall;
       if (!last.recheck) last.recheck = { at: session.at, level: lv, kind: 'due' };
       if (RANK[lv] >= 1) {
-        const why = RANK[lv] < RANK[last.level] ? `複測：連續 2 次低於上一輪，降為${LEVEL_LABEL[lv]}層` : `複測仍為${LEVEL_LABEL[lv]}層，開新一輪`;
-        ep = newEpisode(db, person, session, ev, at, sla, lv, why, sessions.slice(-2).map((x) => x.id));
+        const w = RANK[lv] < RANK[last.level] ? `複測：連續 2 次低於上一輪，降為${LEVEL_LABEL[lv]}層` : `複測仍為${LEVEL_LABEL[lv]}層，開新一輪`;
+        ep = newEpisode(db, person, session, ev, at, sla, lv, why ? `${why}；${w}` : w, sessions.slice(Math.max(0, idx - 1), idx + 1).map((x) => x.id));
       } else {
         log(last, at, 'rechecked', '複測：最近 2 次皆為綠層，回到例行量測');
         last.nextDue = null;
       }
       return { ev, episode: ep };
     }
-    log(last, at, 'measured', `複測日前量測（${LEVEL_LABEL[ev.overall]}層），未開新輪`);
+    log(last, at, 'measured', `複測日前量測（${measuredText(ev)}），未開新輪`);
     return { ev, episode: last };
+  }
+
+  function measuredText(ev) {
+    return `${LEVEL_LABEL[ev.overall]}層${ev.pending.length ? `；${ev.pending.map((k) => ITEM_LABEL[k]).join('、')}暫定${LEVEL_LABEL[ev.pendingLevel]}` : ''}`;
   }
 
   /**
@@ -1099,6 +1316,8 @@
     // 期限從匯入時間起算（偵測日仍顯示實際量測日），避免歷史資料一匯入就大量逾期
     const importAt = (opts && opts.now) || new Date().toISOString();
     for (const m of add) { db.measurements.push(m); const res = ingest(db, m.personId, new Date(m.at) > new Date(importAt) ? m.at : importAt, slaOverride); if (res) last.set(m.personId, res.ev.overall); }
+    // 暫定滿 7 天仍未再量測者，以單次量測開案
+    expirePending(db, importAt, slaOverride);
     const levels = { red: 0, orange: 0, yellow: 0 };
     for (const l of last.values()) if (l in levels) levels[l]++;
     return Object.assign(summary, { added: add.length, levels });
@@ -1170,7 +1389,7 @@
   const DOWNGRADE_888 = { 2: '連續 2 個場次低於先前最高層級', 1: '任 1 個場次低於先前最高層級' };
 
   function level888(ev) {
-    const ls = KEYS_888.map((k) => ev.items[k]).filter((r) => r && r.level !== 'na').map((r) => r.level);
+    const ls = KEYS_888.map((k) => ev.items[k]).filter((r) => r && r.level !== 'na' && !r.pending).map((r) => r.level);
     return ls.length ? maxLevel(ls) : 'na';
   }
 
@@ -1199,8 +1418,8 @@
     const ids = { unscreened: [], yellowUnmanaged: [], orangeNotImproved: [] };
     let screened = 0, visits = 0, everY = 0, mgY = 0, everO = 0, imp = 0;
     for (const p of persons) {
-      const levels = groupSessions(mBy.get(p.id) || []).filter((s) => inWin(s.at))
-        .map((s) => level888(evaluateSession(personCtx(p, s.at), s.readings))).filter((l) => l !== 'na');
+      const levels = evaluateTimeline(p, groupSessions(mBy.get(p.id) || []), t).filter((x) => inWin(x.s.at))
+        .map((x) => level888(x.ev)).filter((l) => l !== 'na');
       if (!levels.length) { ids.unscreened.push(p.id); continue; }
       screened++; visits += levels.length;
       const top = maxLevel(levels);
@@ -1226,7 +1445,7 @@
   const Engine = {
     LEVELS, RANK, LEVEL_LABEL, LEVEL_MEANING, ITEMS, ITEM_LABEL, SYMPTOMS, SYMPTOM_BY_LABEL, ASSUMPTIONS, DEFAULT_SLA, CLOSE_REASONS,
     STATES, OPEN_STATES, STATE_LABEL, isOpen, recheckOverdue, SCHEMA, migrateWorkflow, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, DOWNGRADE_888, KEYS_888, cascade888,
-    LIFESTYLE, lifestylePrescription, restartClock, DEFAULT_SITE_ALIASES, normalizeSite, parseSiteNurseSheet, applySiteNurses, RANGES, validateMeasurement, validateBackup, mergeRoster, importMeasurementRows, IMPORT_ALIAS, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
+    LIFESTYLE, lifestylePrescription, restartClock, SMOOTH, AVG_DAYS, AUTO_CLOSE, vitalKeys, sessionValue, evalAt, evaluateTimeline, expirePending, autoClose, DEFAULT_SITE_ALIASES, normalizeSite, parseSiteNurseSheet, applySiteNurses, RANGES, validateMeasurement, validateBackup, mergeRoster, importMeasurementRows, IMPORT_ALIAS, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
     maxLevel, evaluateSession, groupSessions, ingest, act, nextStep, quality, wilson, prescription,
     parseRoster, parseBirth, validTwId, maskId, maskName, ageAt, addDays, sameDay, normGluType, uid,
   };

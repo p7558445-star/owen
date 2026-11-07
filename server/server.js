@@ -302,8 +302,8 @@ route('POST', /^\/api\/persons\/([\w-]{1,64})\/measurements$/, { limit: 16384 },
   if (bad.length) return send(res, 400, { error: bad.join('；') });
   DB.measurements.push(meas);
   const r = E.ingest(DB, person.id, meas.at, sla());
-  persist(); audit(req, '新增量測', person.id, E.LEVEL_LABEL[r.ev.overall] + '層');
-  send(res, 200, { data: scoped(req.user), overall: r.ev.overall, emergency: r.ev.emergency });
+  persist(); audit(req, '新增量測', person.id, E.LEVEL_LABEL[r.ev.overall] + '層' + (r.ev.pending.length ? `（${r.ev.pending.map((k) => E.ITEM_LABEL[k]).join('、')}暫定${E.LEVEL_LABEL[r.ev.pendingLevel]}）` : ''));
+  send(res, 200, { data: scoped(req.user), overall: r.ev.overall, emergency: r.ev.emergency, pending: r.ev.pending, pendingLevel: r.ev.pendingLevel });
 });
 const FLAGS = ['chronic', 'immuno', 'copd', 'medHTN', 'medDM', 'medLipid'];
 route('POST', /^\/api\/persons\/([\w-]{1,64})\/flags$/, { limit: 4096 }, async (req, res, body, m) => {
@@ -481,7 +481,14 @@ function main() {
   const server = CFG.tlsCert ? https.createServer({ cert: fs.readFileSync(CFG.tlsCert), key: fs.readFileSync(CFG.tlsKey), minVersion: 'TLSv1.2' }, handle) : http.createServer(handle);
   server.headersTimeout = 20000; server.requestTimeout = 60000;
   server.listen(CFG.port, CFG.host, () => console.log(`健康站追蹤後台已啟動：${CFG.tlsCert ? 'https' : 'http'}://${CFG.host}:${CFG.port}/`));
+  // 血壓、脈搏、血氧單次異常的「暫定」滿 7 天仍未再量測者開案：啟動時與每小時檢查
+  sweepPending(); setInterval(sweepPending, 3600000).unref();
   setInterval(() => { const now = Date.now(); for (const [sid, s] of SESSIONS) if (now - s.last > CFG.idleMin * 60000 || now - s.created > CFG.absoluteHours * 3600000) SESSIONS.delete(sid); }, 60000).unref();
 }
+function sweepPending() {
+  const n = E.expirePending(DB, new Date().toISOString(), sla());
+  if (n) { persist(); audit(null, '暫定到期開案', '', `${n} 人`); }
+  return n;
+}
 if (require.main === module) main();
-module.exports = { handle, CFG, _internal: { hashPassword, verifyPassword, verifyAudit, sealFile, openFile, loadKey, loadDb, auditInit, init, db: () => DB, sessions: SESSIONS } };
+module.exports = { handle, CFG, _internal: { hashPassword, verifyPassword, verifyAudit, sealFile, openFile, loadKey, loadDb, auditInit, init, sweepPending, db: () => DB, sessions: SESSIONS } };

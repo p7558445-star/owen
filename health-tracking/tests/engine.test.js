@@ -94,14 +94,16 @@ t('lifestyle-only abnormal opens no episode', () => {
   assert.ok(E.lifestylePrescription(db.persons[0], r.ev).includes('BMI'));
 });
 t('lifestyle items ride along in the prescription of a BP episode', () => {
-  const db = { persons: [{ id: 'p1', name: 'x', sex: 'M', birth: '1950-01-01', heightCm: 165 }], measurements: [{ id: 'a', personId: 'p1', at: '2026-01-01T01:00:00Z', sbp: 165, dbp: 80, weight: 80 }], episodes: [] };
+  const db = { persons: [{ id: 'p1', name: 'x', sex: 'M', birth: '1950-01-01', heightCm: 165 }], measurements: [{ id: 'a0', personId: 'p1', at: '2025-12-30T01:00:00Z', sbp: 165, dbp: 80 }], episodes: [] };
+  E.ingest(db, 'p1', '2025-12-30T01:00:00Z');
+  db.measurements.push({ id: 'a', personId: 'p1', at: '2026-01-01T01:00:00Z', sbp: 165, dbp: 80, weight: 80 });
   const { episode: ep } = E.ingest(db, 'p1', '2026-01-01T01:00:00Z');
   assert.equal(ep.level, 'orange'); assert.ok(E.prescription(db.persons[0], ep).includes('生活型態追蹤'));
   assert.equal(new Date(ep.due.confirm) - new Date('2026-01-01T01:00:00Z') > 20 * 864e5, true, 'lifestyle timing does not shorten BP deadlines');
 });
 
 t('MetS still counts toward overall and opens an episode with referral', () => {
-  const ev = lv([{ waist: 92, sbp: 132, dbp: 80, tg: 160, hdl: 45, glucose: 95, glucoseType: '空腹' }]);
+  const ev = lv([{ waist: 92, sbp: 120, dbp: 80, tg: 160, hdl: 38, glucose: 95, glucoseType: '空腹' }]);
   assert.equal(ev.items.mets.level, 'orange'); assert.ok(!ev.items.mets.lifestyle); assert.equal(ev.overall, 'orange');
   assert.ok(ev.items.mets.actions.some((a) => a.includes('轉介')));
 });
@@ -114,12 +116,14 @@ function db0() { return { persons: [{ id: 'p1', name: '測試', sex: 'M', birth:
 const add = (db, at, v) => { db.measurements.push(Object.assign({ id: 'm' + db.measurements.length, personId: 'p1', at }, v)); return E.ingest(db, 'p1', at); };
 const D = (d, h = 9) => new Date(2026, 0, d, h).toISOString();
 
+// 血壓 7 天內 2 次：同日相隔 2 小時（不同場次）各量 1 次
+const add2 = (db, at, v) => { add(db, new Date(new Date(at).getTime() - 2 * 3600000).toISOString(), v); return add(db, at, v); };
 const loop = (db, ep, at, visit) => { E.act(db, ep.id, 'notify', {}, at); E.act(db, ep.id, 'intervene', { rx: 'x' }, at); E.act(db, ep.id, 'confirm', visit ? { visitDate: visit } : {}, at); };
 const DT = (y, m, d) => new Date(y, m - 1, d, 9).toISOString();
 
 t('one round: detect -> notify -> intervene -> confirm', () => {
   const db = db0();
-  const { episode: ep } = add(db, D(1), { sbp: 165, dbp: 85 });
+  const { episode: ep } = add2(db, D(1), { sbp: 165, dbp: 85 });
   assert.equal(ep.level, 'orange'); assert.equal(ep.state, 'detected');
   assert.throws(() => E.act(db, ep.id, 'intervene', { rx: 'x' }, D(2)), /通知/);
   E.act(db, ep.id, 'notify', { method: '電話', assignee: '社區護理師 甲' }, D(2), '社區護理師 甲');
@@ -134,7 +138,7 @@ t('one round: detect -> notify -> intervene -> confirm', () => {
 
 t('readings before the re-check date do not open a new round', () => {
   const db = db0();
-  const { episode: ep } = add(db, D(1), { sbp: 165, dbp: 85 });
+  const { episode: ep } = add2(db, D(1), { sbp: 165, dbp: 85 });
   loop(db, ep, D(2), '2026-01-03');
   add(db, D(10), { sbp: 166, dbp: 85 });
   add(db, D(20), { sbp: 150, dbp: 85 });
@@ -143,7 +147,7 @@ t('readings before the re-check date do not open a new round', () => {
 
 t('higher reading after confirmation opens a new round immediately', () => {
   const db = db0();
-  const { episode: ep } = add(db, D(1), { sbp: 145, dbp: 70 });
+  const { episode: ep } = add2(db, D(1), { sbp: 145, dbp: 70 });
   loop(db, ep, D(2));
   const { episode: n } = add(db, D(10), { sbp: 182, dbp: 100 });
   assert.equal(db.episodes.length, 2); assert.equal(n.level, 'red'); assert.equal(n.state, 'detected'); assert.equal(n.cycle, 2);
@@ -152,26 +156,30 @@ t('higher reading after confirmation opens a new round immediately', () => {
 
 t('after re-check date: still abnormal opens next round; downgrade needs 2 consecutive lower', () => {
   const db = db0();
-  const { episode: ep } = add(db, DT(2026, 1, 1), { sbp: 165, dbp: 85 });
+  const { episode: ep } = add2(db, DT(2026, 1, 1), { sbp: 165, dbp: 85 });
   loop(db, ep, DT(2026, 1, 2), '2026-01-03');
   add(db, DT(2026, 3, 20), { sbp: 120, dbp: 70 });        // 複測日前：綠
-  const { episode: n } = add(db, DT(2026, 4, 5), { sbp: 145, dbp: 80 }); // 複測日後：黃；最近 2 次 = 綠、黃 → 黃
+  add(db, DT(2026, 4, 5), { sbp: 145, dbp: 80 });        // 複測日後：黃，單次暫定，先不判定
+  assert.equal(db.episodes.length, 1);
+  const { episode: n } = add(db, DT(2026, 4, 6), { sbp: 145, dbp: 80 }); // 7 天 2 次平均黃；前一次已併入平均 → 黃
   assert.equal(db.episodes.length, 2); assert.equal(n.level, 'yellow'); assert.equal(ep.recheck.level, 'yellow');
   assert.ok(n.log[0].text.includes('降為黃層'));
 });
 
 t('after re-check date: one lower reading keeps the level (no single-reading downgrade)', () => {
   const db = db0();
-  const { episode: ep } = add(db, DT(2026, 1, 1), { sbp: 165, dbp: 85 });
+  const { episode: ep } = add2(db, DT(2026, 1, 1), { sbp: 165, dbp: 85 });
   loop(db, ep, DT(2026, 1, 2), '2026-01-03');
   add(db, DT(2026, 3, 20), { sbp: 168, dbp: 85 });        // 複測日前：仍橙
-  const { episode: n } = add(db, DT(2026, 4, 5), { sbp: 150, dbp: 80 }); // 複測日後：黃；最近 2 次 = 橙、黃 → 橙
-  assert.equal(n.level, 'orange');
+  add(db, DT(2026, 4, 5), { sbp: 150, dbp: 80 });        // 複測日後：黃，單次暫定
+  E.expirePending(db, DT(2026, 4, 13));                  // 7 天未再量 → 以單次判定；最近 2 次 = 橙、黃 → 橙
+  const n = db.episodes[db.episodes.length - 1];
+  assert.equal(db.episodes.length, 2); assert.equal(n.level, 'orange');
 });
 
 t('after re-check date: two green readings return to routine without a new round', () => {
   const db = db0();
-  const { episode: ep } = add(db, DT(2026, 1, 1), { sbp: 145, dbp: 80 });
+  const { episode: ep } = add2(db, DT(2026, 1, 1), { sbp: 145, dbp: 80 });
   loop(db, ep, DT(2026, 1, 2));
   add(db, DT(2026, 6, 25), { sbp: 120, dbp: 70 });
   add(db, DT(2026, 7, 5), { sbp: 122, dbp: 72 });
@@ -180,7 +188,7 @@ t('after re-check date: two green readings return to routine without a new round
 
 t('upgrade during an open round goes back to detect', () => {
   const db = db0();
-  const { episode: ep } = add(db, D(1), { sbp: 145, dbp: 70 });
+  const { episode: ep } = add2(db, D(1), { sbp: 145, dbp: 70 });
   E.act(db, ep.id, 'notify', {}, D(2));
   add(db, D(5), { sbp: 182, dbp: 100 });
   assert.equal(ep.level, 'red'); assert.equal(ep.state, 'detected'); assert.equal(ep.notify, undefined);
@@ -212,11 +220,11 @@ t('red: re-check 2 weeks after visit, physician close needs follow-up date', () 
 
 t('overdue step and re-check reminders count as unclosed', () => {
   const db = db0();
-  const { episode: ep } = add(db, D(1), { sbp: 165, dbp: 85 });
+  const { episode: ep } = add2(db, D(1), { sbp: 165, dbp: 85 });
   E.act(db, ep.id, 'notify', {}, D(2));
   assert.ok(E.nextStep(ep, D(30)).overdue);
   assert.equal(E.quality(db, D(30), null).unclosed, 1);
-  const db2 = db0(); const { episode: e2 } = add(db2, DT(2026, 1, 1), { sbp: 145, dbp: 80 }); loop(db2, e2, DT(2026, 1, 2));
+  const db2 = db0(); const { episode: e2 } = add2(db2, DT(2026, 1, 1), { sbp: 145, dbp: 80 }); loop(db2, e2, DT(2026, 1, 2));
   assert.equal(E.recheckOverdue(db2, DT(2026, 8, 1)).length, 1);
   const q = E.quality(db2, DT(2026, 8, 1), null);
   assert.equal(q.unclosed, 1); assert.equal(q.retest.n, 1); assert.equal(q.retest.k, 0);
@@ -234,20 +242,21 @@ t('888 intervene: only 3-high abnormalities count', () => {
   const db = db0();
   add(db, D(1), { sbp: 120, dbp: 70, temp: 37.5, weight: 70 }); // 體溫黃、BMI 黃，但三高綠
   assert.equal(E.cascade888(db, D(2)).intervene.n, 0);
-  const { episode: ep } = add(db, D(5), { sbp: 165, dbp: 85 });
-  let c = E.cascade888(db, D(6));
+  const { episode: ep } = add2(db, D(15), { sbp: 165, dbp: 85 });
+  let c = E.cascade888(db, D(16));
   assert.equal(c.intervene.n, 1); assert.equal(c.intervene.k, 0);
-  E.act(db, ep.id, 'notify', {}, D(7));
-  assert.equal(E.cascade888(db, D(8)).intervene.k, 1);
-  assert.equal(E.cascade888(db, D(8), { entry: 'intervened' }).intervene.k, 0);
+  E.act(db, ep.id, 'notify', {}, D(17));
+  assert.equal(E.cascade888(db, D(18)).intervene.k, 1);
+  assert.equal(E.cascade888(db, D(18), { entry: 'intervened' }).intervene.k, 0);
 });
 t('888 improve: two consecutive sessions below peak, ignoring non-3-high items', () => {
   const db = db0();
-  add(db, D(1), { sbp: 165, dbp: 85 });                 // 橙
+  add(db, D(1), { sbp: 165, dbp: 85 });                 // 橙（7 天未再量 → 以單次判定）
   add(db, D(10), { sbp: 145, dbp: 75, weight: 76 });    // 三高黃（BMI 橙不影響）
-  let c = E.cascade888(db, D(11));
+  assert.equal(E.cascade888(db, D(11)).improve.k, 0, 'single reading still pending');
+  let c = E.cascade888(db, D(18));
   assert.equal(c.improve.n, 1); assert.equal(c.improve.k, 0, 'one lower session is not enough');
-  assert.equal(E.cascade888(db, D(11), { downgrade: 1 }).improve.k, 1, 'single-session option');
+  assert.equal(E.cascade888(db, D(18), { downgrade: 1 }).improve.k, 1, 'single-session option');
   add(db, D(20), { sbp: 128, dbp: 76 });                // 綠
   assert.equal(E.cascade888(db, D(21)).improve.k, 1);
 });
@@ -292,26 +301,153 @@ t('BP prescription follows revised tiers, not the document 130/80 cut-off', () =
 
 t('regradeOpen applies new rules to open episodes and logs it', () => {
   const db = db0();
-  const { episode: ep } = add(db, D(1), { sbp: 165, dbp: 80 });
+  const { episode: ep } = add2(db, D(1), { sbp: 165, dbp: 80 });
   ep.level = 'red'; ep.initialLevel = 'red'; // 模擬舊規則留下的層級
-  const db2 = db0(); const { episode: e2 } = add(db2, D(1), { sbp: 143, dbp: 70 }); e2.level = 'orange';
-  const db3 = db0(); const { episode: e3 } = add(db3, D(1), { sbp: 135, dbp: 70, glucose: 110, glucoseType: '空腹' }); e3.items = [{ key: 'bp', level: 'orange' }]; e3.level = 'orange';
+  const db2 = db0(); const { episode: e2 } = add2(db2, D(1), { sbp: 143, dbp: 70 }); e2.level = 'orange';
+  const db3 = db0(); const { episode: e3 } = add2(db3, D(1), { sbp: 135, dbp: 70, glucose: 110, glucoseType: '空腹' }); e3.items = [{ key: 'bp', level: 'orange' }]; e3.level = 'orange';
   let ch = E.regradeOpen(db, D(2));
   assert.equal(ep.level, 'orange'); assert.ok(ep.log.some((l) => l.text.includes('規則更新'))); assert.equal(ch.length, 1);
   E.regradeOpen(db2, D(2)); assert.equal(e2.level, 'yellow', '143/70 is yellow under revised tiers');
   E.regradeOpen(db3, D(2)); assert.equal(e3.level, 'yellow'); assert.deepEqual(e3.items.map((i) => i.key), ['glucose', 'mets'], 'BP no longer abnormal; fasting 110 counts for glucose and one MetS criterion');
   const db4 = db0(); const { episode: e4 } = add(db4, D(1), { sbp: 125, dbp: 70 }); assert.equal(e4, undefined);
-  const db5 = db0(); const { episode: e5 } = add(db5, D(1), { sbp: 145, dbp: 70 }); db5.measurements[0].sbp = 120; // 數值改變後已不異常
+  const db5 = db0(); const { episode: e5 } = add2(db5, D(1), { sbp: 145, dbp: 70 }); db5.measurements.forEach((m) => { m.sbp = 120; }); // 數值改變後已不異常
   E.regradeOpen(db5, D(2)); assert.equal(e5.state, 'closed'); assert.equal(e5.close.reason, E.REGRADE_CLOSE);
   assert.equal(db.rulesVersion, E.RULES_VERSION);
 });
 t('regradeOpen keeps the highest level since the case opened (no silent downgrade)', () => {
   const db = db0();
-  const { episode: ep } = add(db, D(1), { sbp: 165, dbp: 80 }); // 橙
+  const { episode: ep } = add2(db, D(1), { sbp: 165, dbp: 80 }); // 橙
   add(db, D(5), { sbp: 120, dbp: 70 });                         // 之後一次正常
   E.regradeOpen(db, D(6));
   assert.equal(ep.level, 'orange', 'one normal reading must not downgrade via regrade');
   assert.equal(ep.state, 'detected');
+});
+
+// ── 血壓、脈搏、血氧：7 天平均（至少 2 次）與自動結案
+t('7-day average: single orange BP is pending and opens no round', () => {
+  const db = db0();
+  const r = add(db, D(1), { sbp: 165, dbp: 85 });
+  assert.equal(r.episode, undefined); assert.ok(r.ev.pending.includes('bp')); assert.equal(r.ev.pendingLevel, 'orange');
+  assert.ok(r.ev.items.bp.pending); assert.ok(r.ev.items.bp.notes.some((n) => n.includes('暫定')));
+  assert.ok(db.persons[0].pending.some((x) => x.key === 'bp'));
+});
+t('7-day average: second reading within 7 days decides by the mean', () => {
+  const db = db0();
+  add(db, D(1), { sbp: 165, dbp: 85 });
+  const r = add(db, D(4), { sbp: 171, dbp: 95 });
+  assert.equal(r.ev.items.bp.level, 'orange'); assert.equal(r.ev.items.bp.avg.n, 2); assert.deepEqual(r.ev.items.bp.avg.mean, [168, 90]);
+  assert.equal(r.episode.level, 'orange'); assert.ok(!db.persons[0].pending);
+  const db2 = db0();
+  add(db2, D(1), { sbp: 165, dbp: 85 });
+  const r2 = add(db2, D(3), { sbp: 128, dbp: 78 });
+  assert.equal(r2.ev.items.bp.level, 'yellow', 'mean 146.5/81.5 is yellow'); assert.equal(r2.episode.level, 'yellow');
+  const db3 = db0();
+  add(db3, D(1), { sbp: 145, dbp: 80 });
+  const r3 = add(db3, D(2), { sbp: 128, dbp: 76 });
+  assert.equal(r3.ev.overall, 'green'); assert.equal(db3.episodes.length, 0);
+});
+t('7-day average: readings 7+ days apart are not averaged', () => {
+  const db = db0();
+  add(db, D(1), { sbp: 165, dbp: 85 });
+  const r = add(db, D(9), { sbp: 120, dbp: 70 });
+  assert.ok(!r.ev.items.bp.avg);
+  assert.equal(db.episodes.length, 1, 'the earlier single reading expired and opened a round');
+  assert.equal(db.episodes[0].level, 'orange'); assert.ok(db.episodes[0].log[0].text.includes('7 天內未再量測'));
+});
+t('7-day average: pending expires after 7 days via expirePending; detection date stays the measurement date', () => {
+  const db = db0();
+  add(db, D(1), { sbp: 165, dbp: 85 });
+  assert.equal(E.expirePending(db, D(7)), 0);
+  assert.equal(E.expirePending(db, D(8, 10)), 1);
+  const ep = db.episodes[0];
+  assert.equal(ep.level, 'orange'); assert.equal(ep.detectedAt, D(1)); assert.equal(ep.clockStart, D(8, 10));
+  assert.ok(!db.persons[0].pending); assert.equal(E.expirePending(db, D(20)), 0);
+});
+t('7-day average: red single reading still opens immediately', () => {
+  const db = db0();
+  const r = add(db, D(1), { sbp: 185, dbp: 95 });
+  assert.equal(r.episode.level, 'red'); assert.deepEqual(r.ev.pending, []);
+});
+t('7-day average: pulse and SpO2 single abnormal pending; ARR flag not averaged', () => {
+  assert.ok(item('pulse', [{ pulse: 105 }]).pending);
+  assert.ok(!item('pulse', [{ pulse: 80, arr: true }]).pending);
+  assert.ok(item('spo2', [{ spo2: 93 }]).pending);
+  assert.ok(!item('spo2', [{ spo2: 93 }, { spo2: 93 }, { spo2: 92 }]).pending, 'three on-site retests confirm orange');
+  const db = db0();
+  add(db, D(1), { spo2: 93, pulse: 72 });
+  const r = add(db, D(2), { spo2: 94, pulse: 75 });
+  assert.equal(r.ev.items.spo2.level, 'yellow'); assert.equal(r.episode.level, 'yellow');
+});
+t('7-day average: MetS whose level hinges on one BP reading is pending too', () => {
+  const ev = lv([{ waist: 92, sbp: 132, dbp: 80, tg: 160, hdl: 45 }]);
+  assert.ok(ev.items.mets.pending); assert.equal(ev.items.mets.level, 'orange'); assert.equal(ev.overall, 'yellow', 'TG 160 keeps lipid yellow');
+  const db = db0();
+  add(db, D(1), { waist: 92, sbp: 132, dbp: 80, tg: 160, hdl: 45 });
+  const r = add(db, D(3), { waist: 92, sbp: 120, dbp: 70, tg: 160, hdl: 45 });
+  assert.equal(r.ev.items.mets.level, 'yellow', 'BP condition uses the 7-day mean (126/75)'); assert.ok(!r.ev.items.mets.pending);
+});
+t('auto-close: untouched non-red round closes after 2 consecutive normal sessions', () => {
+  const db = db0();
+  const { episode: ep } = add2(db, D(1), { sbp: 165, dbp: 85 });
+  add(db, D(3), { sbp: 125, dbp: 75 });
+  add(db, D(4), { sbp: 120, dbp: 70 });
+  assert.equal(ep.state, 'detected', '7-day mean still yellow, keep the round');
+  add(db, D(9), { sbp: 122, dbp: 72 });
+  assert.equal(ep.state, 'closed'); assert.equal(ep.close.reason, E.AUTO_CLOSE);
+  assert.ok(ep.log[ep.log.length - 1].text.includes('未及通知'));
+  // 已通知者不自動結案
+  const db2 = db0(); const { episode: e2 } = add2(db2, D(1), { sbp: 165, dbp: 85 }); E.act(db2, e2.id, 'notify', {}, D(2));
+  add(db2, D(9), { sbp: 120, dbp: 70 }); add(db2, D(10), { sbp: 121, dbp: 70 });
+  assert.equal(e2.state, 'notified');
+  // 紅層不自動結案
+  const db3 = db0(); const { episode: e3 } = add(db3, D(1), { sbp: 185, dbp: 100 });
+  add(db3, D(9), { sbp: 120, dbp: 70 }); add(db3, D(10), { sbp: 121, dbp: 70 });
+  assert.equal(e3.state, 'detected');
+  // 血糖等其他項目造成的輪次不自動結案
+  const db4 = db0(); const { episode: e4 } = add(db4, D(1), { glucose: 130, glucoseType: '空腹' });
+  add(db4, D(9), { sbp: 120, dbp: 70 }); add(db4, D(10), { sbp: 121, dbp: 70 });
+  assert.equal(e4.state, 'detected');
+  // 中間有異常就不算連續
+  const db5 = db0(); const { episode: e5 } = add2(db5, D(1), { sbp: 165, dbp: 85 });
+  add(db5, D(9), { sbp: 120, dbp: 70 }); add(db5, D(10), { sbp: 150, dbp: 70 });
+  assert.equal(e5.state, 'detected');
+});
+t('auto-close: quality counts it as a close reason', () => {
+  const db = db0();
+  add2(db, D(1), { sbp: 165, dbp: 85 }); add(db, D(9), { sbp: 120, dbp: 70 }); add(db, D(10), { sbp: 121, dbp: 70 });
+  assert.equal(E.quality(db, D(11), null).closeReasons[E.AUTO_CLOSE], 1);
+});
+t('regradeOpen auto-closes untouched rounds already followed by 2 normal sessions', () => {
+  const db = db0();
+  const { episode: ep } = add2(db, D(1), { sbp: 165, dbp: 85 });
+  db.measurements.push({ id: 'z1', personId: 'p1', at: D(9), sbp: 120, dbp: 70 }, { id: 'z2', personId: 'p1', at: D(10), sbp: 121, dbp: 70 });
+  const ch = E.regradeOpen(db, D(11));
+  assert.equal(ep.state, 'closed'); assert.equal(ep.close.reason, E.AUTO_CLOSE); assert.equal(ch.length, 1);
+});
+t('regradeOpen does not close a round just because its basis is now a single reading', () => {
+  const db = db0();
+  const { episode: ep } = add(db, D(1), { glucose: 130, glucoseType: '空腹' });
+  db.measurements[0].sbp = 165; db.measurements[0].dbp = 85;
+  E.regradeOpen(db, D(2));
+  assert.equal(ep.state, 'detected'); assert.equal(ep.level, 'orange');
+});
+t('evaluateTimeline: pending resolved by a later reading vs. expired', () => {
+  const db = db0();
+  db.measurements.push({ id: 'a', personId: 'p1', at: D(1), sbp: 165, dbp: 85 }, { id: 'b', personId: 'p1', at: D(3), sbp: 168, dbp: 88 }, { id: 'c', personId: 'p1', at: D(20), sbp: 150, dbp: 80 });
+  const tl = E.evaluateTimeline(db.persons[0], E.groupSessions(db.measurements), D(30));
+  assert.equal(tl[0].ev.overall, 'na', 'resolved by the next reading: not counted on its own');
+  assert.equal(tl[1].ev.overall, 'orange');
+  assert.equal(tl[2].ev.overall, 'yellow', 'no follow-up within 7 days: single reading counts');
+  assert.equal(E.evaluateTimeline(db.persons[0], E.groupSessions(db.measurements), D(22))[2].ev.overall, 'na', 'still within 7 days');
+});
+t('import: pending readings older than 7 days at import time open rounds', () => {
+  const rows = [['識別值', '量測時間', '收縮壓', '舒張壓'], ['A123456789', '2026-07-01 09:00', 165, 90]];
+  const db = { persons: [{ id: 'p1', name: 'x', sex: 'M', birth: '1950-01-01', nationalId: 'A123456789', site: 'A' }], measurements: [], episodes: [] };
+  E.importMeasurementRows(db, rows, null, null, { now: '2026-11-04T02:00:00.000Z' });
+  assert.equal(db.episodes.length, 1); assert.equal(db.episodes[0].level, 'orange');
+  const db2 = { persons: [{ id: 'p1', name: 'x', sex: 'M', birth: '1950-01-01', nationalId: 'A123456789', site: 'A' }], measurements: [], episodes: [] };
+  E.importMeasurementRows(db2, [rows[0], ['A123456789', '2026-11-03 09:00', 165, 90]], null, null, { now: '2026-11-04T02:00:00.000Z' });
+  assert.equal(db2.episodes.length, 0); assert.ok(db2.persons[0].pending.length >= 1);
 });
 
 // ── 資安：輸入驗證
@@ -375,7 +511,7 @@ t('parse site-nurse sheet: header detection, placeholder 新工', () => {
 });
 t('new rounds auto-assigned to the site nurse; open rounds reassigned with a log entry', () => {
   const db = { persons: [{ id: 'p1', name: 'x', sex: 'M', birth: '1950-01-01', site: '頭前社區' }], measurements: [], episodes: [], settings: { siteNurse: { 頭前社區: '陳佩君' } } };
-  db.measurements.push({ id: 'm1', personId: 'p1', at: '2026-12-01T01:00:00Z', sbp: 165, dbp: 85 });
+  db.measurements.push({ id: 'm1', personId: 'p1', at: '2026-12-01T01:00:00Z', glucose: 130, glucoseType: '空腹' });
   const { episode: ep } = E.ingest(db, 'p1', '2026-12-01T01:00:00Z');
   assert.equal(ep.assignee, '陳佩君');
   db.settings.siteNurse = { 頭前社區: '林芷彤' };
@@ -395,8 +531,8 @@ t('import: deadlines start at import time; detection date stays the measurement 
 });
 t('restartClock: only untouched overdue rounds, logged', () => {
   const db = db0();
-  const { episode: a } = add(db, D(1), { sbp: 165, dbp: 85 });
-  const db2 = db0(); const { episode: b2 } = add(db2, D(1), { sbp: 165, dbp: 85 }); E.act(db2, b2.id, 'notify', {}, D(2));
+  const { episode: a } = add2(db, D(1), { sbp: 165, dbp: 85 });
+  const db2 = db0(); const { episode: b2 } = add2(db2, D(1), { sbp: 165, dbp: 85 }); E.act(db2, b2.id, 'notify', {}, D(2));
   assert.equal(E.restartClock(db, D(60), null, 'x', true), 1, 'dry run counts');
   assert.equal(a.due.notify < D(60), true);
   E.restartClock(db, D(60), null, '管理者');

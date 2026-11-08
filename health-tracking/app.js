@@ -545,9 +545,10 @@
         <div><h3>下一步：${esc(s.label)}</h3><div class="small">${dueText(s)}</div></div>
         <div class="tbl-wrap"><table class="small"><thead><tr><th>步驟</th><th>期限</th><th>完成</th></tr></thead><tbody>${dueRows.map(([n, d, done]) => `<tr><td>${n}</td><td class="tnum">${d ? fmtD(d) : '—'}</td><td class="tnum">${done ? '✓ ' + fmtD(done) : (d && new Date(d) < now ? '<span class="overdue">逾期</span>' : '—')}</td></tr>`).join('')}</tbody></table></div>
       </div>
-      <form id="ep-form" class="no-print" style="margin-top:12px">${ep.upgradeNotice && !ep.upgradeNotice.done ? `<div class="banner" style="margin-bottom:10px"><strong>本輪已升級：${E.LEVEL_LABEL[ep.upgradeNotice.from]} → ${E.LEVEL_LABEL[ep.upgradeNotice.to]}層</strong>（${fmtDT(ep.upgradeNotice.at)}）。已完成的通知、介入保留，不退回；請補一筆通知，告知民眾${E.RANK[ep.level] >= 2 ? '需就醫' : '量測結果'}。
+      <form id="ep-form" class="no-print" style="margin-top:12px">${ep.upgradeNotice && !ep.upgradeNotice.done ? `<div class="banner" style="margin-bottom:10px"><strong>本輪已升級：${E.LEVEL_LABEL[ep.upgradeNotice.from]} → ${E.LEVEL_LABEL[ep.upgradeNotice.to]}層</strong>（${fmtDT(ep.upgradeNotice.at)}）。已完成的通知、介入保留，不退回；請補一筆通知，告知民眾${E.RANK[ep.level] >= 2 ? '需就醫' : '量測結果'}${ep.upgradeNotice.needRx ? '，並依橙層重開健康處方（原處方保留在紀錄中）' : ''}。
           <div class="form-grid" style="margin-top:8px"><label class="f">通知方式<select name="rnMethod"><option>電話</option><option>App 推播</option><option>現場</option><option>家訪</option><option>簡訊</option></select></label><label class="f">內容／備註<input type="text" name="rnNote" placeholder="例：已電話告知升級為橙層，請 4 週內就醫"></label></div>
-          <button class="btn primary" style="margin-top:8px" data-act="renotify">完成補通知</button></div>` : ''}${form}</form>
+          ${ep.upgradeNotice.needRx ? `<label class="f" style="margin-top:8px">重開健康處方（依${E.LEVEL_LABEL[ep.level]}層，必填，可修改）<textarea name="rnRx">${esc(E.prescription(p, ep))}</textarea></label>` : ''}
+          <div class="row" style="margin-top:8px"><button class="btn primary" data-act="renotify">${ep.upgradeNotice.needRx ? '完成補通知並重開處方' : '完成補通知'}</button>${ep.upgradeNotice.needRx ? '<button class="btn" type="button" data-print-rn>列印新處方</button>' : ''}</div></div>` : ''}${form}</form>
       <details class="no-print" style="margin-top:12px"><summary class="small">結案（轉由醫師持續管理、死亡、遷出、失聯、拒絕）</summary>
         <div class="row" style="margin-top:8px"><select id="close-reason">${['已轉由醫師持續管理', '失聯', '拒絕', '遷出', '死亡'].map((r) => `<option>${r}</option>`).join('')}</select><input type="date" id="close-followup" title="轉由醫師管理時填回診日期"><input type="text" id="close-note" placeholder="說明（如：3 次電訪未接）"><button class="btn danger" type="button" id="close-btn">結案</button></div>
       </details>
@@ -1174,13 +1175,14 @@
       const sb = $('#spo2-base'); if (sb) sb.onchange = () => { if (SERVER) { srv(api(`persons/${p.id}/flags`, { patch: { spo2Baseline: sb.value === '' ? null : +sb.value } })); return; } p.spo2Baseline = sb.value === '' ? null : +sb.value; save(); };
       $$('[data-print-rx]').forEach((b) => (b.onclick = (e) => { e.preventDefault(); const ta = $('#ep-form textarea[name=rx]'); printRx(p, ta ? Object.assign({}, ep, { rx: { text: ta.value } }) : ep); }));
       if (!ep) return;
+      $$('[data-print-rn]').forEach((b) => (b.onclick = (e) => { e.preventDefault(); const ta = $('#ep-form textarea[name=rnRx]'); printRx(p, Object.assign({}, ep, { rx: { text: ta.value } })); }));
       $$('[data-act]').forEach((b) => (b.onclick = () => {
         const fd = new FormData($('#ep-form')); let payload = Object.fromEntries(fd.entries());
-        if (b.dataset.act === 'renotify') payload = { method: payload.rnMethod, note: payload.rnNote };
-        if (SERVER) { srv(api(`episodes/${ep.id}/act`, { action: b.dataset.act, payload }), () => (b.dataset.act === 'renotify' ? '已記錄：補通知' : `已記錄：${E.STATE_LABEL[(db.episodes.find((x) => x.id === ep.id) || {}).state] || '完成'}`)); return; }
+        if (b.dataset.act === 'renotify') payload = { method: payload.rnMethod, note: payload.rnNote, rx: payload.rnRx };
+        if (SERVER) { srv(api(`episodes/${ep.id}/act`, { action: b.dataset.act, payload }), () => (b.dataset.act === 'renotify' ? (payload.rx ? '已記錄：補通知、重開處方' : '已記錄：補通知') : `已記錄：${E.STATE_LABEL[(db.episodes.find((x) => x.id === ep.id) || {}).state] || '完成'}`)); return; }
         try {
           E.act(db, ep.id, b.dataset.act, payload, nowISO(), ui.user, sla());
-          save(); render(); toast(b.dataset.act === 'renotify' ? '已記錄：補通知' : `已記錄：${E.STATE_LABEL[db.episodes.find((x) => x.id === ep.id).state]}`);
+          save(); render(); toast(b.dataset.act === 'renotify' ? (payload.rx ? '已記錄：補通知、重開處方' : '已記錄：補通知') : `已記錄：${E.STATE_LABEL[db.episodes.find((x) => x.id === ep.id).state]}`);
         } catch (err) { toast(err.message); }
       }));
       $('#close-btn').onclick = () => {

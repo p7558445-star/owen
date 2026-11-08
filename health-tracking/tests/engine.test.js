@@ -463,12 +463,26 @@ t('mid-round upgrade to orange keeps progress and requires a make-up notice', ()
   assert.ok(E.nextStep(ep, D(20, 12)).label.startsWith('補通知'));
   assert.equal(ep.due.notify.slice(0, 10), new Date(2026, 0, 23, 23, 59).toISOString().slice(0, 10), 'orange notify deadline from upgrade date');
   assert.throws(() => E.act(db, ep.id, 'confirm', { visitDate: '2026-01-25' }, D(25)), /補通知/);
-  E.act(db, ep.id, 'renotify', { method: '電話', note: '請就醫' }, D(21), '護理師');
-  assert.ok(ep.upgradeNotice.done); assert.equal(ep.log[ep.log.length - 1].type, 'notified');
+  assert.ok(ep.upgradeNotice.needRx, 'prescription already given at yellow');
+  assert.throws(() => E.act(db, ep.id, 'renotify', { method: '電話' }, D(21)), /重開健康處方/);
+  const rx = E.prescription(db.persons[0], ep);
+  assert.ok(rx.includes('橙層'));
+  E.act(db, ep.id, 'renotify', { method: '電話', note: '請就醫', rx }, D(21), '護理師');
+  assert.ok(ep.upgradeNotice.done); assert.equal(ep.rx.text, rx); assert.equal(ep.rxHistory[0].text, 'x', 'old prescription kept');
+  assert.ok(ep.log.some((l) => l.type === 'notified' && l.text.startsWith('補通知')) && ep.log[ep.log.length - 1].text.includes('重開健康處方'));
   assert.throws(() => E.act(db, ep.id, 'renotify', {}, D(21)), /沒有需要補/);
   assert.throws(() => E.act(db, ep.id, 'confirm', {}, D(25)), /就醫日期/, 'orange now needs a visit date');
   E.act(db, ep.id, 'confirm', { visitDate: '2026-01-25' }, D(26));
   assert.equal(ep.state, 'confirmed');
+});
+t('mid-round upgrade before intervention needs no extra prescription (intervene step uses the new level)', () => {
+  const db = db0();
+  const { episode: ep } = add2(db, D(1), { sbp: 145, dbp: 80 });
+  E.act(db, ep.id, 'notify', {}, D(2));
+  add(db, D(20, 7), { sbp: 168, dbp: 92 }); add(db, D(20, 10), { sbp: 166, dbp: 90 });
+  assert.equal(ep.state, 'notified'); assert.ok(!ep.upgradeNotice.needRx);
+  E.act(db, ep.id, 'renotify', {}, D(21));
+  assert.ok(E.prescription(db.persons[0], ep).includes('橙層'));
 });
 t('mid-round upgrade to red still goes back to detect for same-day notice', () => {
   const db = db0();

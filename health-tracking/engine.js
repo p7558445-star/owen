@@ -756,8 +756,9 @@
         const prev = ep.level;
         ep.level = ev.overall; ep.levelAt = at; ep.levelSessionId = session.id; ep.basisSessionIds = [session.id]; ep.items = summarizeItems(ev); ep.emergency = ev.emergency; ep.provisional = ev.provisional;
         ep.due = computeDue(ep, sla, ep.items);
-        ep.upgradeNotice = { at, from: prev, to: ev.overall };
-        log(ep, at, 'upgraded', `${why ? why + '，' : '新量測'}升級：${LEVEL_LABEL[prev]} → ${LEVEL_LABEL[ev.overall]}，不退回，停在「${STATE_LABEL[ep.state]}」；請補一筆通知，告知民眾${RANK[ev.overall] >= 2 ? '就醫' : '量測結果'}`);
+        // 已開過健康處方、升到橙層：須依新層級重開處方（與補通知一起完成）
+        ep.upgradeNotice = { at, from: prev, to: ev.overall, needRx: ev.overall === 'orange' && !!ep.intervene };
+        log(ep, at, 'upgraded', `${why ? why + '，' : '新量測'}升級：${LEVEL_LABEL[prev]} → ${LEVEL_LABEL[ev.overall]}，不退回，停在「${STATE_LABEL[ep.state]}」；請補一筆通知，告知民眾${RANK[ev.overall] >= 2 ? '就醫' : '量測結果'}${ep.upgradeNotice.needRx ? '，並重開健康處方' : ''}`);
         return { ev, episode: ep };
       }
       if (RANK[ev.overall] > RANK[ep.level]) {
@@ -833,8 +834,15 @@
         log(ep, at, 'notified', `通知民眾（${ep.notify.method}）${ep.assignee ? '｜負責：' + ep.assignee : ''}${p.note ? '：' + p.note : ''}`, by); break;
       case 'renotify': // 進行中升級（不退回）後補的通知紀錄
         if (!ep.upgradeNotice || ep.upgradeNotice.done) throw new Error('目前沒有需要補的通知');
+        if (ep.upgradeNotice.needRx && !String(p.rx || '').trim()) throw new Error(`已升級為${LEVEL_LABEL[ep.level]}層，需依新層級重開健康處方`);
         ep.upgradeNotice.done = { at, method: p.method || '電話', by };
-        log(ep, at, 'notified', `補通知：已升級為${LEVEL_LABEL[ep.level]}層（${ep.upgradeNotice.done.method}）${p.note ? '：' + p.note : ''}`, by); break;
+        log(ep, at, 'notified', `補通知：已升級為${LEVEL_LABEL[ep.level]}層（${ep.upgradeNotice.done.method}）${p.note ? '：' + p.note : ''}`, by);
+        if (ep.upgradeNotice.needRx) {
+          ep.rxHistory = (ep.rxHistory || []).concat(ep.rx ? [ep.rx] : []);
+          ep.rx = { at, text: String(p.rx), by };
+          log(ep, at, 'intervened', `重開健康處方（依${LEVEL_LABEL[ep.level]}層）`, by);
+        }
+        break;
       case 'intervene':
         if (ep.state !== 'notified') throw new Error('需先完成通知');
         if (!p.rx) throw new Error('只要有異常就要完成健康處方');
@@ -882,7 +890,7 @@
   function nextStep(ep, now) {
     const t = new Date(now || Date.now());
     const mk = (label, due) => ({ label, due, overdue: !!due && new Date(due) < t, daysLeft: due ? Math.round((startOfDay(due) - startOfDay(t)) / DAY) : null });
-    if (isOpen(ep) && ep.upgradeNotice && !ep.upgradeNotice.done) return mk(`補通知：已升級為${LEVEL_LABEL[ep.level]}層${RANK[ep.level] >= 2 ? '，告知就醫' : ''}`, ep.due.notify);
+    if (isOpen(ep) && ep.upgradeNotice && !ep.upgradeNotice.done) return mk(`補通知：已升級為${LEVEL_LABEL[ep.level]}層${RANK[ep.level] >= 2 ? '，告知就醫' : ''}${ep.upgradeNotice.needRx ? '並重開處方' : ''}`, ep.due.notify);
     switch (ep.state) {
       case 'detected': return mk(ep.level === 'red' ? '當日通知民眾' : '通知民眾', ep.due.notify);
       case 'notified': return mk('介入：開立健康處方', ep.due.intervene);

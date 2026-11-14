@@ -424,6 +424,14 @@ t('regradeOpen auto-closes untouched rounds already followed by 2 normal session
   const ch = E.regradeOpen(db, D(11));
   assert.equal(ep.state, 'closed'); assert.equal(ep.close.reason, E.AUTO_CLOSE); assert.equal(ch.length, 1);
 });
+t('regradeOpen never sends handled rounds back to detect (no re-notification after an update)', () => {
+  const db = db0();
+  const { episode: ep } = add2(db, D(1), { sbp: 165, dbp: 85 });
+  E.act(db, ep.id, 'notify', {}, D(2)); E.act(db, ep.id, 'intervene', { rx: '舊處方' }, D(3));
+  db.measurements.forEach((m) => { m.sbp = 185; m.dbp = 112; }); // 新規則下更高
+  E.regradeOpen(db, D(4));
+  assert.equal(ep.state, 'intervened'); assert.ok(ep.notify && ep.intervene); assert.equal(ep.rx.text, '舊處方');
+});
 t('regradeOpen does not close a round just because its basis is now a single reading', () => {
   const db = db0();
   const { episode: ep } = add(db, D(1), { glucose: 130, glucoseType: '空腹' });

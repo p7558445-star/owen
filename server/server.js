@@ -477,6 +477,19 @@ function main() {
     persist(); audit(null, '重設密碼（主機指令）', u.username);
     return console.log(`帳號 ${u.username} 臨時密碼：${pw}`);
   }
+  // 更新前後檢查（唯讀，不寫入任何檔案）：資料能否開啟、筆數、各步驟案件數、規則版本、稽核紀錄
+  if (cmd === 'check') {
+    const by = (arr, f) => arr.reduce((o, x) => { const k = f(x); o[k] = (o[k] || 0) + 1; return o; }, {});
+    const open = DB.episodes.filter(E.isOpen);
+    const v = verifyAudit();
+    console.log(`資料夾：${CFG.dataDir}`);
+    console.log(`民眾 ${DB.persons.length} 人、量測 ${DB.measurements.length} 筆、追蹤案 ${DB.episodes.length} 案、帳號 ${DB.users.length} 個`);
+    console.log(`進行中 ${open.length} 案：${Object.entries(by(open, (e) => E.STATE_LABEL[e.state])).map(([k, n]) => `${k} ${n}`).join('、') || '無'}`);
+    console.log(`已通知過的進行中案件：${open.filter((e) => e.notify).length} 案`);
+    console.log(`分層規則：資料 ${DB.rulesVersion || '（未記錄）'}／程式 ${E.RULES_VERSION}${DB.rulesVersion === E.RULES_VERSION ? '' : '（不同：管理者登入後會看到「依新規則重新判定」提示，按下前不會改動任何案件）'}`);
+    console.log(v.ok ? `稽核紀錄完整（${v.count} 筆）` : `稽核紀錄在第 ${v.brokenAt} 筆遭到修改或刪除`);
+    process.exit(v.ok ? 0 : 2);
+  }
   if (cmd === 'verify-audit') { const v = verifyAudit(); console.log(v.ok ? `稽核紀錄完整（${v.count} 筆）` : `稽核紀錄在第 ${v.brokenAt} 筆遭到修改或刪除`); process.exit(v.ok ? 0 : 2); }
   const server = CFG.tlsCert ? https.createServer({ cert: fs.readFileSync(CFG.tlsCert), key: fs.readFileSync(CFG.tlsKey), minVersion: 'TLSv1.2' }, handle) : http.createServer(handle);
   server.headersTimeout = 20000; server.requestTimeout = 60000;

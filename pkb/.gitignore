@@ -1,0 +1,30 @@
+# Obsidian 個人狀態（每台裝置不同）
+.obsidian/workspace*.json
+.obsidian/cache
+.trash/
+
+# 原始大檔：錄音與掃描不進 Git（請另行備份，例如外接硬碟或院內 NAS）
+99-Attachments/audio/*
+!99-Attachments/audio/.gitkeep
+99-Attachments/scans/*
+!99-Attachments/scans/.gitkeep
+*.m4a
+*.mp3
+*.wav
+*.mp4
+*.mov
+
+# 機密
+.env
+*.key
+**/PHI/
+**/phi/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# 腳本處理紀錄
+00-Inbox/_pipeline.log
+.pipeline-state.json

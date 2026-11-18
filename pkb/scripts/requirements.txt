@@ -1,0 +1,5 @@
+anthropic>=1.0
+pyyaml>=6.0
+pillow>=10.0
+faster-whisper>=1.1        # 本機語音轉文字
+opencc-python-reimplemented>=0.1.7   # 簡轉繁（台灣用語）

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# 提交前掃描 staged 的文字檔是否含可識別病人資訊。啟用：git config core.hooksPath .githooks
+exec python3 "$(git rev-parse --show-toplevel)/scripts/phi_scan.py" --staged

@@ -66,7 +66,7 @@
     db.audit.push({ at: nowISO(), user: ui.user || '', action, detail: detail || '' });
     if (db.audit.length > 5000) db.audit.splice(0, db.audit.length - 5000);
   }
-  const t888 = () => Object.assign({}, E.DEFAULT_888, (db.settings && db.settings.t888) || {});
+  const t888 = () => E.settings888(db.settings && db.settings.t888);
   const sla = () => Object.assign({}, E.DEFAULT_SLA, (db.settings && db.settings.sla) || {});
   const DEFAULT_NURSES = '甲乙丙丁戊己庚辛'.split('').map((x) => '社區護理師 ' + x);
   const nurses = () => (db.settings && db.settings.nurses && db.settings.nurses.length ? db.settings.nurses : DEFAULT_NURSES);
@@ -491,6 +491,32 @@
 
   function timeline(e) { return `<ul class="timeline">${e.log.slice().reverse().map((x) => `<li><time class="tnum">${fmtDT(x.at)}</time>${esc(x.text)} <span class="muted small">${esc(x.by)}</span></li>`).join('')}</ul>`; }
 
+  // 結構化生活型態諮詢紀錄（健康888「要介入」分子需要完整紀錄：主題、準備度、具體目標、方式）
+  function counselFields(c) {
+    const v = c || {};
+    return `<fieldset class="counsel" style="margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:8px 12px"><legend class="small"><strong>結構化生活型態諮詢紀錄</strong>　<span class="muted">健康888「要介入」只計入填寫完整者</span></legend>
+      <div class="small" style="margin-bottom:4px">諮詢主題（可複選）</div>
+      <div class="chips">${Object.entries(E.COUNSEL_TOPICS).map(([k, t]) => `<label class="row small" style="margin:0 10px 4px 0"><input type="checkbox" name="cTopic" value="${k}" ${(v.topics || []).includes(k) ? 'checked' : ''}>${t}</label>`).join('')}</div>
+      <div class="form-grid" style="margin-top:6px">
+        <label class="f">改變準備度<select name="cReady"><option value="">請選擇</option>${Object.entries(E.COUNSEL_READINESS).map(([k, t]) => `<option value="${k}" ${v.readiness === k ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+        <label class="f">諮詢方式<select name="cMethod"><option value="">請選擇</option>${E.COUNSEL_METHODS.map((m) => `<option ${v.method === m ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
+        <label class="f">諮詢時間（分鐘，可不填）<input type="number" name="cMin" min="1" max="180" value="${v.minutes || ''}"></label>
+      </div>
+      <label class="f" style="margin-top:6px">具體目標（與民眾共同訂定）<input type="text" name="cGoal" maxlength="200" value="${esc(v.goal || '')}" placeholder="例：每天鹽 5 公克以下；每週快走 5 天、每次 30 分鐘"></label>
+    </fieldset>`;
+  }
+  function counselFrom(fd) {
+    const c = { topics: fd.getAll('cTopic'), readiness: fd.get('cReady') || '', method: fd.get('cMethod') || '', goal: fd.get('cGoal') || '', minutes: fd.get('cMin') || '' };
+    return c.topics.length || c.readiness || c.method || c.goal.trim() ? c : null;
+  }
+  function counselCard(ep) {
+    if (!ep.intervene) return '';
+    const ok = E.validCounsel(ep.counsel);
+    return `<details class="no-print" style="margin-top:10px" ${ok ? '' : 'open'}><summary><strong>生活型態諮詢紀錄</strong> ${ok ? `<span class="tag">已填寫 ${fmtD(ep.counsel.at)}</span>` : '<span class="tag warn">尚未填寫・健康888 不計入</span>'}</summary>
+      ${ok ? `<p class="small">${esc(E.counselText(ep.counsel))}</p>` : ''}
+      <form id="counsel-form">${counselFields(ep.counsel)}<button class="btn sm primary" type="button" id="counsel-btn" style="margin-top:8px">${ok ? '更新諮詢紀錄' : '補登諮詢紀錄'}</button></form></details>`;
+  }
+
   const STEPS = ['detected', 'notified', 'intervened', 'confirmed'];
   function stepper(state) {
     const ci = STEPS.indexOf(state);
@@ -506,7 +532,7 @@
         ${stepper('confirmed')}
         <div class="grid g2" style="margin-top:10px"><div><h3>下一步：${esc(s.label)}</h3><div class="small">${dueText(s)}</div></div>
         <p class="small muted" style="margin:0">民眾回站量測後，系統自動判斷：升高立即開始下一輪；複測日後仍異常則開始下一輪（最近 2 次量測取較高者）；連續 2 次綠層則回到例行量測。</p></div>
-        <div class="row" style="margin-top:10px"><button class="btn" type="button" id="add-m2">登錄複測量測</button></div></div>`;
+        <div class="row" style="margin-top:10px"><button class="btn" type="button" id="add-m2">登錄複測量測</button></div>${counselCard(last)}</div>`;
     }
     const pend = p.pending && p.pending.length ? p.pending : null;
     const until = pend ? new Date(new Date(pend.reduce((m, x) => (new Date(x.at) < new Date(m) ? x.at : m), pend[0].at)).getTime() + E.AVG_DAYS * 86400000) : null;
@@ -527,6 +553,7 @@
       case 'notified':
         form = `<label class="f">健康處方（必填，可修改）<textarea name="rx">${esc(E.prescription(p, ep))}</textarea></label>
           <label class="f" style="margin-top:8px">介入紀錄<input type="text" name="note" placeholder="例：衛教飲食與運動、評估用藥狀況"></label>
+          ${counselFields(null)}
           <div class="row" style="margin-top:10px"><button class="btn primary" data-act="intervene">完成介入（開立健康處方）</button><button class="btn" data-print-rx>列印處方</button></div>`; break;
       case 'intervened':
         form = needVisit ? `<div class="form-grid"><label class="f">就醫日期<input type="date" name="visitDate" required></label><label class="f">就醫院所／科別<input type="text" name="facility" placeholder="彰基家醫科"></label></div>
@@ -545,6 +572,7 @@
         <div><h3>下一步：${esc(s.label)}</h3><div class="small">${dueText(s)}</div></div>
         <div class="tbl-wrap"><table class="small"><thead><tr><th>步驟</th><th>期限</th><th>完成</th></tr></thead><tbody>${dueRows.map(([n, d, done]) => `<tr><td>${n}</td><td class="tnum">${d ? fmtD(d) : '—'}</td><td class="tnum">${done ? '✓ ' + fmtD(done) : (d && new Date(d) < now ? '<span class="overdue">逾期</span>' : '—')}</td></tr>`).join('')}</tbody></table></div>
       </div>
+      ${counselCard(ep)}
       <form id="ep-form" class="no-print" style="margin-top:12px">${ep.upgradeNotice && !ep.upgradeNotice.done ? `<div class="banner" style="margin-bottom:10px"><strong>本輪已升級：${E.LEVEL_LABEL[ep.upgradeNotice.from]} → ${E.LEVEL_LABEL[ep.upgradeNotice.to]}層</strong>（${fmtDT(ep.upgradeNotice.at)}）。已完成的通知、介入保留，不退回；請補一筆通知，告知民眾${E.RANK[ep.level] >= 2 ? '需就醫' : '量測結果'}${ep.upgradeNotice.needRx ? '，並依橙層重開健康處方（原處方保留在紀錄中）' : ''}。
           <div class="form-grid" style="margin-top:8px"><label class="f">通知方式<select name="rnMethod"><option>電話</option><option>App 推播</option><option>現場</option><option>家訪</option><option>簡訊</option></select></label><label class="f">內容／備註<input type="text" name="rnNote" placeholder="例：已電話告知升級為橙層，請 4 週內就醫"></label></div>
           ${ep.upgradeNotice.needRx ? `<label class="f" style="margin-top:8px">重開健康處方（依${E.LEVEL_LABEL[ep.level]}層，必填，可修改）<textarea name="rnRx">${esc(E.prescription(p, ep))}</textarea></label>` : ''}
@@ -662,7 +690,7 @@
     <details class="card" style="margin-top:12px"><summary><strong>計算說明</strong></summary><ul class="small">
       <li>只看三高項目：每個量測場次的「三高層級」取血壓、血糖、血脂三項中最高者；脈搏、血氧、體溫、體位與代謝症候群不納入。</li>
       <li>「至少一次進入黃層／橙層以上」：觀察期內任一場次的三高層級達到該層以上；同一場次 60 分鐘內重測回到綠層者不計。</li>
-      <li>「進入管理流程」（要介入的分子）：該民眾有含三高異常項目的追蹤案，在觀察期內到達「${entry}」。可在設定頁改為已通知／已介入／已確認。</li>
+      <li>「進入管理流程」（要介入的分子）：該民眾有含三高異常項目的追蹤案，在觀察期內到達「${entry}」。${o.entry === 'counseled' ? '結構化諮詢紀錄需填齊：諮詢主題（至少 1 項）、改變準備度、具體目標、諮詢方式；可在介入時填寫，或在個案頁補登。' : ''}可在設定頁改為其他定義。</li>
       <li>「曾經降級過」（有改善的分子）：首次達橙層以上之後，三高層級${o.downgrade == 1 ? '有任 1 個場次' : '連續 2 個場次'}低於先前最高層級（例如紅→橙、橙→黃或綠）。之後若再升高，最高層級隨之提高，需再次降級才算。</li>
       <li>單次量測受測量誤差與「趨中迴歸」影響：因為數值高而被選入的人，下一次量測平均就會比較低，即使沒有任何介入。預設要求連續 2 次，就是為了減少這種假性改善。</li>
       <li>三個指標的分母是不同母群，不是前一段的分子，不能相乘。</li>
@@ -1119,7 +1147,7 @@
     if (raw && window.Vault.isEnvelope(raw)) await unlockScreen(raw);
     else db = raw;
   // 示範資料是以舊規則產生的：直接依新規則重新產生（保留設定）
-  if (db && db.demo && (db.rulesVersion !== E.RULES_VERSION || db.schema !== E.SCHEMA)) { const keep = db.settings; db = window.Demo.generate(new Date()); if (keep) db.settings = Object.assign(db.settings, keep); save(); setTimeout(() => toast('分層規則已更新，示範資料已依新規則重新產生'), 300); }
+  if (db && db.demo && (db.rulesVersion !== E.RULES_VERSION || db.schema !== E.SCHEMA || db.demoV !== 2)) { const keep = db.settings; db = window.Demo.generate(new Date()); if (keep) db.settings = Object.assign(db.settings, keep); save(); setTimeout(() => toast('分層規則已更新，示範資料已依新規則重新產生'), 300); }
   if (!db) { db = window.Demo.generate(new Date()); save(); }
   // 正式資料：舊版七步驟流程轉成四步驟（每案寫入處理紀錄）
   if (!db.demo && db.schema !== E.SCHEMA) { const n = E.migrateWorkflow(db); save(); if (n) setTimeout(() => toast(`流程已改為四步驟，${n} 筆追蹤案已轉換`), 300); }
@@ -1174,11 +1202,18 @@
       const lr = $('#life-rx'); if (lr) lr.onclick = () => { const l = IX.latest(p.id); printRx(p, null, E.lifestylePrescription(p, l.ev)); };
       const sb = $('#spo2-base'); if (sb) sb.onchange = () => { if (SERVER) { srv(api(`persons/${p.id}/flags`, { patch: { spo2Baseline: sb.value === '' ? null : +sb.value } })); return; } p.spo2Baseline = sb.value === '' ? null : +sb.value; save(); };
       $$('[data-print-rx]').forEach((b) => (b.onclick = (e) => { e.preventDefault(); const ta = $('#ep-form textarea[name=rx]'); printRx(p, ta ? Object.assign({}, ep, { rx: { text: ta.value } }) : ep); }));
+      const cEp = ep || IX.last.get(p.id); const cb = $('#counsel-btn');
+      if (cb) cb.onclick = () => {
+        const counsel = counselFrom(new FormData($('#counsel-form')));
+        if (SERVER) { srv(api(`episodes/${cEp.id}/act`, { action: 'counsel', payload: { counsel } }), '已記錄生活型態諮詢'); return; }
+        try { E.act(db, cEp.id, 'counsel', { counsel }, nowISO(), ui.user, sla()); save(); render(); toast('已記錄生活型態諮詢'); } catch (err) { toast(err.message); }
+      };
       if (!ep) return;
       $$('[data-print-rn]').forEach((b) => (b.onclick = (e) => { e.preventDefault(); const ta = $('#ep-form textarea[name=rnRx]'); printRx(p, Object.assign({}, ep, { rx: { text: ta.value } })); }));
       $$('[data-act]').forEach((b) => (b.onclick = () => {
         const fd = new FormData($('#ep-form')); let payload = Object.fromEntries(fd.entries());
         if (b.dataset.act === 'renotify') payload = { method: payload.rnMethod, note: payload.rnNote, rx: payload.rnRx };
+        if (b.dataset.act === 'intervene') { const c = counselFrom(fd); for (const k of ['cTopic', 'cReady', 'cMethod', 'cGoal', 'cMin']) delete payload[k]; if (c) payload.counsel = c; }
         if (SERVER) { srv(api(`episodes/${ep.id}/act`, { action: b.dataset.act, payload }), () => (b.dataset.act === 'renotify' ? (payload.rx ? '已記錄：補通知、重開處方' : '已記錄：補通知') : `已記錄：${E.STATE_LABEL[(db.episodes.find((x) => x.id === ep.id) || {}).state] || '完成'}`)); return; }
         try {
           E.act(db, ep.id, b.dataset.act, payload, nowISO(), ui.user, sla());

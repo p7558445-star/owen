@@ -283,10 +283,15 @@ route('POST', /^\/api\/episodes\/([\w-]{1,64})\/act$/, { limit: 65536 }, async (
   if (!ep) return send(res, 404, { error: '找不到追蹤案' });
   personFor(req.user, ep.personId);
   const action = String(body.action || '');
-  if (!['notify', 'renotify', 'intervene', 'confirm', 'close'].includes(action)) return send(res, 400, { error: '不支援的操作' });
+  if (!['notify', 'renotify', 'intervene', 'counsel', 'confirm', 'close'].includes(action)) return send(res, 400, { error: '不支援的操作' });
   const p = body.payload || {};
   const payload = {};
   for (const k of ['method', 'note', 'assignee', 'rx', 'visitDate', 'facility', 'result', 'reason', 'followupDate']) if (p[k] != null) payload[k] = String(p[k]).slice(0, k === 'rx' ? 20000 : 500);
+  // 結構化諮詢紀錄：只取已知欄位，內容由 engine 依固定選項驗證
+  if (p.counsel && typeof p.counsel === 'object') {
+    const c = p.counsel;
+    payload.counsel = { topics: (Array.isArray(c.topics) ? c.topics : []).slice(0, 20).map((x) => String(x).slice(0, 20)), readiness: String(c.readiness || '').slice(0, 20), method: String(c.method || '').slice(0, 10), goal: String(c.goal || '').slice(0, 200), minutes: String(c.minutes || '').slice(0, 4) };
+  }
   E.act(DB, ep.id, action, payload, new Date().toISOString(), req.user.name, sla());
   persist(); audit(req, '追蹤操作', ep.personId, `${action}（第 ${ep.cycle} 輪）`);
   send(res, 200, { data: scoped(req.user) });
@@ -352,7 +357,7 @@ route('POST', /^\/api\/settings$/, { admin: true, limit: 16384 }, async (req, re
   out.retest = Object.assign({}, cur.retest); for (const l of ['orange', 'yellow']) if (s.retest && l in s.retest) out.retest[l] = num(s.retest[l]);
   out.phoneAfterVisit = 'phoneAfterVisit' in s ? num(s.phoneAfterVisit) : cur.phoneAfterVisit;
   const t = body.t888 || {};
-  const t888 = { lookbackDays: num(t.lookbackDays) ?? 365, entry: ['notified', 'intervened', 'confirmed'].includes(t.entry) ? t.entry : 'notified', downgrade: t.downgrade == 1 ? 1 : 2, target: Math.min(1, Math.max(0.01, Number(t.target) || 0.8)) };
+  const t888 = { lookbackDays: num(t.lookbackDays) ?? 365, entry: E.ENTRY_888[t.entry] ? t.entry : E.DEFAULT_888.entry, entryV: E.settings888({}).entryV, downgrade: t.downgrade == 1 ? 1 : 2, target: Math.min(1, Math.max(0.01, Number(t.target) || 0.8)) };
   DB.settings = Object.assign({}, DB.settings, { sla: out, t888 });
   persist(); audit(req, '變更設定', '', '處理時限、健康888 定義');
   send(res, 200, { data: scoped(req.user) });

@@ -822,7 +822,7 @@
     const sla = Object.assign({}, DEFAULT_SLA, slaOverride || {});
     const ep = db.episodes.find((e) => e.id === epId);
     if (!ep) throw new Error('找不到追蹤案');
-    if (!isOpen(ep)) throw new Error('本輪已完成，下一輪會在複測或升級時自動開始');
+    if (!isOpen(ep) && !(action === 'counsel' && ep.state === 'confirmed')) throw new Error('本輪已完成，下一輪會在複測或升級時自動開始');
     const at = now || new Date().toISOString();
     const p = payload || {};
     switch (action) {
@@ -846,10 +846,20 @@
       case 'intervene':
         if (ep.state !== 'notified') throw new Error('需先完成通知');
         if (!p.rx) throw new Error('只要有異常就要完成健康處方');
-        ep.intervene = { at, by, note: p.note || '' };
-        ep.rx = { at, text: p.rx, by };
-        ep.state = 'intervened';
-        log(ep, at, 'intervened', `介入：開立健康處方${p.note ? '：' + p.note : ''}`, by); break;
+        { const c = cleanCounsel(p.counsel);
+          ep.intervene = { at, by, note: p.note || '' };
+          ep.rx = { at, text: p.rx, by };
+          ep.state = 'intervened';
+          log(ep, at, 'intervened', `介入：開立健康處方${p.note ? '：' + p.note : ''}`, by);
+          if (c) { ep.counsel = Object.assign({ at, by }, c); log(ep, at, 'counseled', counselText(c), by); } }
+        break;
+      case 'counsel': { // 介入後補登（或更新）結構化生活型態諮詢紀錄
+        if (!ep.intervene) throw new Error('需先完成介入（開立健康處方）');
+        const c = cleanCounsel(p.counsel);
+        if (!c) throw new Error('請填寫生活型態諮詢紀錄');
+        ep.counsel = Object.assign({ at, by }, c);
+        log(ep, at, 'counseled', counselText(c), by); break;
+      }
       case 'confirm': {
         if (ep.state !== 'intervened') throw new Error('需先完成介入');
         if (ep.upgradeNotice && !ep.upgradeNotice.done) throw new Error(`本輪已升級為${LEVEL_LABEL[ep.level]}層，請先補通知`);
@@ -1407,8 +1417,42 @@
   // 有改善：至少一次三高層級達橙層以上的民眾中，曾經降級過
   //         降級＝之後的量測低於先前最高層級；預設需連續 2 個場次（與文件「連續 2 次才降級」一致）
   const KEYS_888 = ['bp', 'glucose', 'lipid'];
-  const DEFAULT_888 = { lookbackDays: 365, entry: 'notified', downgrade: 2, target: 0.8 };
-  const ENTRY_888 = { notified: '已通知（派案並通知民眾）', intervened: '已介入（完成健康處方）', confirmed: '已確認（就醫或完成處方）' };
+  const DEFAULT_888 = { lookbackDays: 365, entry: 'counseled', downgrade: 2, target: 0.8 };
+  const ENTRY_888 = { counseled: '已介入（開立健康處方）且有結構化生活型態諮詢紀錄', notified: '已通知（派案並通知民眾）', intervened: '已介入（完成健康處方）', confirmed: '已確認（就醫或完成處方）' };
+  // 2026/11 院內定義改為「已介入且有結構化諮詢紀錄」；先前存過的設定一次性改為新定義
+  const ENTRY_888_VERSION = 2;
+  function settings888(saved) {
+    const s = Object.assign({}, DEFAULT_888, saved || {});
+    if (!saved || saved.entryV !== ENTRY_888_VERSION) s.entry = DEFAULT_888.entry;
+    s.entryV = ENTRY_888_VERSION;
+    return s;
+  }
+
+  // ───── 結構化生活型態諮詢紀錄 ─────
+  const COUNSEL_TOPICS = {
+    salt: '飲食：減鹽', sugar: '飲食：減糖／醣類控制', fat: '飲食：減油／飽和脂肪', exercise: '身體活動', weight: '體重控制',
+    smoking: '戒菸', alcohol: '節酒', sleep: '睡眠與壓力', meds: '用藥遵從', monitor: '自我量測（居家血壓／血糖）',
+  };
+  const COUNSEL_READINESS = { pre: '尚未考慮改變', contemplation: '考慮中', preparation: '準備開始', action: '已開始行動', maintenance: '維持中' };
+  const COUNSEL_METHODS = ['面談', '電話', '視訊', '團體衛教'];
+  // 完整的紀錄：至少 1 個諮詢主題、改變準備度、具體目標、諮詢方式（時間可不填）
+  function cleanCounsel(c) {
+    if (!c || typeof c !== 'object') return null;
+    const topics = [...new Set((Array.isArray(c.topics) ? c.topics : [c.topics]).map(String))].filter((k) => COUNSEL_TOPICS[k]);
+    const readiness = COUNSEL_READINESS[c.readiness] ? c.readiness : null;
+    const method = COUNSEL_METHODS.includes(c.method) ? c.method : null;
+    const goal = String(c.goal || '').trim().slice(0, 200);
+    const m = num(c.minutes);
+    const minutes = m !== null && m >= 1 && m <= 180 ? Math.round(m) : null;
+    if (!topics.length && !readiness && !goal && !method) return null;
+    const missing = [!topics.length && '諮詢主題', !readiness && '改變準備度', !goal && '具體目標', !method && '諮詢方式'].filter(Boolean);
+    if (missing.length) throw new Error('生活型態諮詢紀錄不完整，缺：' + missing.join('、'));
+    return { topics, readiness, goal, method, minutes };
+  }
+  const validCounsel = (c) => !!(c && c.topics && c.topics.length && c.readiness && c.goal && c.method);
+  function counselText(c) {
+    return `生活型態諮詢（${c.method}${c.minutes ? ' ' + c.minutes + ' 分鐘' : ''}）：${c.topics.map((k) => COUNSEL_TOPICS[k]).join('、')}｜準備度：${COUNSEL_READINESS[c.readiness]}｜目標：${c.goal}`;
+  }
   const DOWNGRADE_888 = { 2: '連續 2 個場次低於先前最高層級', 1: '任 1 個場次低於先前最高層級' };
 
   function level888(ev) {
@@ -1431,6 +1475,7 @@
 
   function cascade888(db, now, opts, filter) {
     const o = Object.assign({}, DEFAULT_888, opts || {});
+    if (!ENTRY_888[o.entry]) o.entry = DEFAULT_888.entry;
     const t = new Date(now || Date.now());
     const since = o.lookbackDays ? addDays(t, -o.lookbackDays) : new Date(0);
     const inWin = (iso) => iso && new Date(iso) >= since && new Date(iso) <= t;
@@ -1448,7 +1493,10 @@
       const top = maxLevel(levels);
       if (RANK[top] < 1) continue;
       everY++;
-      const managed = (eBy.get(p.id) || []).some((e) => e.items.some((i) => KEYS_888.includes(i.key) && RANK[i.level] >= 1) && e.log.some((l) => l.type === o.entry && inWin(l.at)));
+      const reached = (e) => (o.entry === 'counseled'
+        ? !!e.intervene && inWin(e.intervene.at) && validCounsel(e.counsel) && inWin(e.counsel.at)
+        : e.log.some((l) => l.type === o.entry && inWin(l.at)));
+      const managed = (eBy.get(p.id) || []).some((e) => e.items.some((i) => KEYS_888.includes(i.key) && RANK[i.level] >= 1) && reached(e));
       if (managed) mgY++; else ids.yellowUnmanaged.push(p.id);
       if (RANK[top] >= 2) {
         everO++;
@@ -1467,7 +1515,7 @@
 
   const Engine = {
     LEVELS, RANK, LEVEL_LABEL, LEVEL_MEANING, ITEMS, ITEM_LABEL, SYMPTOMS, SYMPTOM_BY_LABEL, ASSUMPTIONS, DEFAULT_SLA, CLOSE_REASONS,
-    STATES, OPEN_STATES, STATE_LABEL, isOpen, recheckOverdue, SCHEMA, migrateWorkflow, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, DOWNGRADE_888, KEYS_888, cascade888,
+    STATES, OPEN_STATES, STATE_LABEL, isOpen, recheckOverdue, SCHEMA, migrateWorkflow, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, settings888, COUNSEL_TOPICS, COUNSEL_READINESS, COUNSEL_METHODS, validCounsel, counselText, DOWNGRADE_888, KEYS_888, cascade888,
     LIFESTYLE, lifestylePrescription, restartClock, SMOOTH, AVG_DAYS, AUTO_CLOSE, vitalKeys, sessionValue, evalAt, evaluateTimeline, expirePending, autoClose, DEFAULT_SITE_ALIASES, normalizeSite, parseSiteNurseSheet, applySiteNurses, RANGES, validateMeasurement, validateBackup, mergeRoster, importMeasurementRows, IMPORT_ALIAS, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
     maxLevel, evaluateSession, groupSessions, ingest, act, nextStep, quality, wilson, prescription,
     parseRoster, parseBirth, validTwId, maskId, maskName, ageAt, addDays, sameDay, normGluType, uid,

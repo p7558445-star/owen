@@ -246,8 +246,9 @@ t('888 intervene: only 3-high abnormalities count', () => {
   let c = E.cascade888(db, D(16));
   assert.equal(c.intervene.n, 1); assert.equal(c.intervene.k, 0);
   E.act(db, ep.id, 'notify', {}, D(17));
-  assert.equal(E.cascade888(db, D(18)).intervene.k, 1);
+  assert.equal(E.cascade888(db, D(18), { entry: 'notified' }).intervene.k, 1);
   assert.equal(E.cascade888(db, D(18), { entry: 'intervened' }).intervene.k, 0);
+  assert.equal(E.cascade888(db, D(18)).intervene.k, 0, 'default: needs intervention + structured counseling');
 });
 t('888 improve: two consecutive sessions below peak, ignoring non-3-high items', () => {
   const db = db0();
@@ -498,6 +499,48 @@ t('mid-round upgrade to red still goes back to detect for same-day notice', () =
   E.act(db, ep.id, 'notify', {}, D(2));
   add(db, D(5), { sbp: 185, dbp: 100 });
   assert.equal(ep.level, 'red'); assert.equal(ep.state, 'detected'); assert.equal(ep.notify, undefined); assert.equal(ep.upgradeNotice, undefined);
+});
+
+// ── 健康888 要介入：已介入且有結構化生活型態諮詢紀錄
+const COUNSEL = { topics: ['salt', 'exercise'], readiness: 'preparation', method: '面談', goal: '每天鹽 5 公克以下', minutes: '15' };
+t('888 intervene default: intervened AND a complete structured counseling record', () => {
+  const db = db0();
+  const { episode: ep } = add2(db, D(1), { sbp: 165, dbp: 85 });
+  E.act(db, ep.id, 'notify', {}, D(2));
+  E.act(db, ep.id, 'intervene', { rx: 'x' }, D(3));
+  let c = E.cascade888(db, D(4));
+  assert.equal(c.intervene.n, 1); assert.equal(c.intervene.k, 0, 'prescription alone is not enough');
+  E.act(db, ep.id, 'counsel', { counsel: COUNSEL }, D(5), '護理師');
+  c = E.cascade888(db, D(6));
+  assert.equal(c.intervene.k, 1);
+  assert.equal(ep.counsel.minutes, 15); assert.ok(ep.log[ep.log.length - 1].text.includes('飲食：減鹽'));
+  assert.equal(E.cascade888(db, D(6), { entry: 'notified' }).intervene.k, 1, 'other definitions still selectable');
+});
+t('counseling can be recorded at intervention; incomplete records are rejected', () => {
+  const db = db0();
+  const { episode: ep } = add2(db, D(1), { sbp: 165, dbp: 85 });
+  E.act(db, ep.id, 'notify', {}, D(2));
+  assert.throws(() => E.act(db, ep.id, 'intervene', { rx: 'x', counsel: { topics: ['salt'], goal: '減鹽' } }, D(3)), /不完整.*改變準備度.*諮詢方式/);
+  assert.equal(ep.state, 'notified', 'nothing saved on rejection');
+  assert.throws(() => E.act(db, ep.id, 'counsel', { counsel: COUNSEL }, D(3)), /需先完成介入/);
+  E.act(db, ep.id, 'intervene', { rx: 'x', counsel: Object.assign({}, COUNSEL, { topics: ['salt', 'bogus'] }) }, D(3));
+  assert.deepEqual(ep.counsel.topics, ['salt'], 'unknown topics dropped');
+  assert.equal(E.cascade888(db, D(4)).intervene.k, 1);
+});
+t('counseling can be added after the round is confirmed', () => {
+  const db = db0();
+  const { episode: ep } = add2(db, D(1), { sbp: 145, dbp: 80 });
+  loop(db, ep, D(2));
+  assert.equal(ep.state, 'confirmed');
+  E.act(db, ep.id, 'counsel', { counsel: COUNSEL }, D(3));
+  assert.ok(E.validCounsel(ep.counsel));
+  assert.throws(() => E.act(db, ep.id, 'notify', {}, D(3)), /本輪已完成/);
+});
+t('888 settings: an older saved entry is switched once to the new definition', () => {
+  assert.equal(E.settings888({ entry: 'notified', lookbackDays: 180 }).entry, 'counseled');
+  assert.equal(E.settings888({ entry: 'notified', lookbackDays: 180 }).lookbackDays, 180);
+  assert.equal(E.settings888({ entry: 'notified', entryV: 2 }).entry, 'notified', 'later explicit choice kept');
+  assert.equal(E.settings888(null).entry, 'counseled');
 });
 
 // ── 資安：輸入驗證

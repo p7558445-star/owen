@@ -290,7 +290,7 @@ route('POST', /^\/api\/episodes\/([\w-]{1,64})\/act$/, { limit: 65536 }, async (
   // 結構化諮詢紀錄：只取已知欄位，內容由 engine 依固定選項驗證
   if (p.counsel && typeof p.counsel === 'object') {
     const c = p.counsel;
-    payload.counsel = { topics: (Array.isArray(c.topics) ? c.topics : []).slice(0, 20).map((x) => String(x).slice(0, 20)), readiness: String(c.readiness || '').slice(0, 20), method: String(c.method || '').slice(0, 10), goal: String(c.goal || '').slice(0, 200), minutes: String(c.minutes || '').slice(0, 4) };
+    payload.counsel = { topics: (Array.isArray(c.topics) ? c.topics : []).slice(0, 20).map((x) => String(x).slice(0, 20)), method: String(c.method || '').slice(0, 10), minutes: String(c.minutes || '').slice(0, 4) };
   }
   E.act(DB, ep.id, action, payload, new Date().toISOString(), req.user.name, sla());
   persist(); audit(req, '追蹤操作', ep.personId, `${action}（第 ${ep.cycle} 輪）`);

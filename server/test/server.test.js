@@ -124,7 +124,7 @@ async function t(name, fn) { try { await fn(); pass++; results.push('PASS ' + na
     const log = I.db().episodes.find((e) => e.id === ep.id).log.pop();
     assert.equal(log.by, '護理師甲');
     // 介入時一併填寫結構化生活型態諮詢紀錄；多餘欄位與未知主題不會寫入
-    const r3 = await n.req('POST', `/api/episodes/${ep.id}/act`, JSON.stringify({ action: 'intervene', payload: { rx: '處方', counsel: { topics: ['salt', 'x'], readiness: 'action', method: '電話', goal: '每週運動 3 次', minutes: '10', __proto__: { polluted: 1 }, evil: '<script>' } } }));
+    const r3 = await n.req('POST', `/api/episodes/${ep.id}/act`, JSON.stringify({ action: 'intervene', payload: { rx: '處方', counsel: { topics: ['salt', 'x'], method: '電話', minutes: '10', __proto__: { polluted: 1 }, evil: '<script>' } } }));
     assert.equal(r3.status, 200);
     const c = I.db().episodes.find((e) => e.id === ep.id).counsel;
     assert.deepEqual(c.topics, ['salt']); assert.equal(c.by, '護理師甲'); assert.equal(c.evil, undefined); assert.equal(({}).polluted, undefined);

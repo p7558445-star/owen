@@ -125,7 +125,7 @@
         case 'detected': if (ignore) return; at = L === 'red' ? lag(0, R() < 0.85 ? 0.2 : 1.5) : L === 'orange' ? lag(0, 6) : lag(1, 20); action = 'notify'; payload = { method: R.pick(['電話', '電話', 'App 推播', '現場']), assignee: nurse }; break;
         case 'notified': if (stall) return; at = L === 'red' ? lag(0, R() < 0.8 ? 0.2 : 2) : L === 'orange' ? lag(0, 5) : lag(3, 60); action = 'intervene'; payload = { rx: E.prescription(p, ep) };
           // 約 7 成同時填寫結構化生活型態諮詢紀錄（示範健康888「要介入」）
-          if (R() < 0.7) { const ks = Object.keys(E.COUNSEL_TOPICS); payload.counsel = { topics: [ks[Math.floor(R() * ks.length)], 'exercise'], readiness: ['contemplation', 'preparation', 'action'][Math.floor(R() * 3)], method: R() < 0.6 ? '面談' : '電話', goal: '每週快走 5 天、每次 30 分鐘', minutes: 10 + Math.floor(R() * 20) }; }
+          if (R() < 0.7) { const ks = Object.keys(E.COUNSEL_TOPICS); payload.counsel = { topics: [ks[Math.floor(R() * ks.length)], 'exercise'], method: R() < 0.6 ? '面談' : '電話', minutes: 10 + Math.floor(R() * 20) }; }
           break;
         case 'intervened': at = L === 'red' ? lag(0, R() < 0.85 ? 0.8 : 3) : L === 'orange' ? (R() < 0.75 ? lag(5, 18) : lag(30, 50)) : lag(5, 70); action = 'confirm';
           payload = { visitDate: at.toISOString().slice(0, 10), facility: R.pick(['彰基本院', '鹿基', '社區診所', '家醫科診所']), result: R.pick(['已就醫，追蹤中', '開始用藥', '調整用藥', '醫師建議觀察']) }; break;

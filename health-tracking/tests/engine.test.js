@@ -502,7 +502,7 @@ t('mid-round upgrade to red still goes back to detect for same-day notice', () =
 });
 
 // ── 健康888 要介入：已介入且有結構化生活型態諮詢紀錄
-const COUNSEL = { topics: ['salt', 'exercise'], readiness: 'preparation', method: '面談', goal: '每天鹽 5 公克以下', minutes: '15' };
+const COUNSEL = { topics: ['salt', 'exercise'], method: '面談', minutes: '15' };
 t('888 intervene default: intervened AND a complete structured counseling record', () => {
   const db = db0();
   const { episode: ep } = add2(db, D(1), { sbp: 165, dbp: 85 });
@@ -520,7 +520,8 @@ t('counseling can be recorded at intervention; incomplete records are rejected',
   const db = db0();
   const { episode: ep } = add2(db, D(1), { sbp: 165, dbp: 85 });
   E.act(db, ep.id, 'notify', {}, D(2));
-  assert.throws(() => E.act(db, ep.id, 'intervene', { rx: 'x', counsel: { topics: ['salt'], goal: '減鹽' } }, D(3)), /不完整.*改變準備度.*諮詢方式/);
+  assert.throws(() => E.act(db, ep.id, 'intervene', { rx: 'x', counsel: { topics: ['salt'] } }, D(3)), /不完整，缺：諮詢方式$/);
+  assert.throws(() => E.act(db, ep.id, 'intervene', { rx: 'x', counsel: { method: '電話' } }, D(3)), /缺：諮詢主題$/);
   assert.equal(ep.state, 'notified', 'nothing saved on rejection');
   assert.throws(() => E.act(db, ep.id, 'counsel', { counsel: COUNSEL }, D(3)), /需先完成介入/);
   E.act(db, ep.id, 'intervene', { rx: 'x', counsel: Object.assign({}, COUNSEL, { topics: ['salt', 'bogus'] }) }, D(3));
@@ -533,7 +534,8 @@ t('counseling can be added after the round is confirmed', () => {
   loop(db, ep, D(2));
   assert.equal(ep.state, 'confirmed');
   E.act(db, ep.id, 'counsel', { counsel: COUNSEL }, D(3));
-  assert.ok(E.validCounsel(ep.counsel));
+  assert.ok(E.validCounsel(ep.counsel)); assert.equal(ep.counsel.goal, undefined); assert.equal(ep.counsel.readiness, undefined);
+  assert.ok(E.validCounsel({ topics: ['salt'], method: '電話' }), 'minutes optional');
   assert.throws(() => E.act(db, ep.id, 'notify', {}, D(3)), /本輪已完成/);
 });
 t('888 settings: an older saved entry is switched once to the new definition', () => {

@@ -491,23 +491,21 @@
 
   function timeline(e) { return `<ul class="timeline">${e.log.slice().reverse().map((x) => `<li><time class="tnum">${fmtDT(x.at)}</time>${esc(x.text)} <span class="muted small">${esc(x.by)}</span></li>`).join('')}</ul>`; }
 
-  // 結構化生活型態諮詢紀錄（健康888「要介入」分子需要完整紀錄：主題、準備度、具體目標、方式）
+  // 結構化生活型態諮詢紀錄（健康888「要介入」分子需要完整紀錄：諮詢主題、諮詢方式）
   function counselFields(c) {
     const v = c || {};
     return `<fieldset class="counsel" style="margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:8px 12px"><legend class="small"><strong>結構化生活型態諮詢紀錄</strong>　<span class="muted">健康888「要介入」只計入填寫完整者</span></legend>
       <div class="small" style="margin-bottom:4px">諮詢主題（可複選）</div>
       <div class="chips">${Object.entries(E.COUNSEL_TOPICS).map(([k, t]) => `<label class="row small" style="margin:0 10px 4px 0"><input type="checkbox" name="cTopic" value="${k}" ${(v.topics || []).includes(k) ? 'checked' : ''}>${t}</label>`).join('')}</div>
       <div class="form-grid" style="margin-top:6px">
-        <label class="f">改變準備度<select name="cReady"><option value="">請選擇</option>${Object.entries(E.COUNSEL_READINESS).map(([k, t]) => `<option value="${k}" ${v.readiness === k ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <label class="f">諮詢方式<select name="cMethod"><option value="">請選擇</option>${E.COUNSEL_METHODS.map((m) => `<option ${v.method === m ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
         <label class="f">諮詢時間（分鐘，可不填）<input type="number" name="cMin" min="1" max="180" value="${v.minutes || ''}"></label>
       </div>
-      <label class="f" style="margin-top:6px">具體目標（與民眾共同訂定）<input type="text" name="cGoal" maxlength="200" value="${esc(v.goal || '')}" placeholder="例：每天鹽 5 公克以下；每週快走 5 天、每次 30 分鐘"></label>
     </fieldset>`;
   }
   function counselFrom(fd) {
-    const c = { topics: fd.getAll('cTopic'), readiness: fd.get('cReady') || '', method: fd.get('cMethod') || '', goal: fd.get('cGoal') || '', minutes: fd.get('cMin') || '' };
-    return c.topics.length || c.readiness || c.method || c.goal.trim() ? c : null;
+    const c = { topics: fd.getAll('cTopic'), method: fd.get('cMethod') || '', minutes: fd.get('cMin') || '' };
+    return c.topics.length || c.method ? c : null;
   }
   function counselCard(ep) {
     if (!ep.intervene) return '';
@@ -690,7 +688,7 @@
     <details class="card" style="margin-top:12px"><summary><strong>計算說明</strong></summary><ul class="small">
       <li>只看三高項目：每個量測場次的「三高層級」取血壓、血糖、血脂三項中最高者；脈搏、血氧、體溫、體位與代謝症候群不納入。</li>
       <li>「至少一次進入黃層／橙層以上」：觀察期內任一場次的三高層級達到該層以上；同一場次 60 分鐘內重測回到綠層者不計。</li>
-      <li>「進入管理流程」（要介入的分子）：該民眾有含三高異常項目的追蹤案，在觀察期內到達「${entry}」。${o.entry === 'counseled' ? '結構化諮詢紀錄需填齊：諮詢主題（至少 1 項）、改變準備度、具體目標、諮詢方式；可在介入時填寫，或在個案頁補登。' : ''}可在設定頁改為其他定義。</li>
+      <li>「進入管理流程」（要介入的分子）：該民眾有含三高異常項目的追蹤案，在觀察期內到達「${entry}」。${o.entry === 'counseled' ? '結構化諮詢紀錄需填齊：諮詢主題（至少 1 項）、諮詢方式（時間可不填）；可在介入時填寫，或在個案頁補登。' : ''}可在設定頁改為其他定義。</li>
       <li>「曾經降級過」（有改善的分子）：首次達橙層以上之後，三高層級${o.downgrade == 1 ? '有任 1 個場次' : '連續 2 個場次'}低於先前最高層級（例如紅→橙、橙→黃或綠）。之後若再升高，最高層級隨之提高，需再次降級才算。</li>
       <li>單次量測受測量誤差與「趨中迴歸」影響：因為數值高而被選入的人，下一次量測平均就會比較低，即使沒有任何介入。預設要求連續 2 次，就是為了減少這種假性改善。</li>
       <li>三個指標的分母是不同母群，不是前一段的分子，不能相乘。</li>
@@ -1213,7 +1211,7 @@
       $$('[data-act]').forEach((b) => (b.onclick = () => {
         const fd = new FormData($('#ep-form')); let payload = Object.fromEntries(fd.entries());
         if (b.dataset.act === 'renotify') payload = { method: payload.rnMethod, note: payload.rnNote, rx: payload.rnRx };
-        if (b.dataset.act === 'intervene') { const c = counselFrom(fd); for (const k of ['cTopic', 'cReady', 'cMethod', 'cGoal', 'cMin']) delete payload[k]; if (c) payload.counsel = c; }
+        if (b.dataset.act === 'intervene') { const c = counselFrom(fd); for (const k of ['cTopic', 'cMethod', 'cMin']) delete payload[k]; if (c) payload.counsel = c; }
         if (SERVER) { srv(api(`episodes/${ep.id}/act`, { action: b.dataset.act, payload }), () => (b.dataset.act === 'renotify' ? (payload.rx ? '已記錄：補通知、重開處方' : '已記錄：補通知') : `已記錄：${E.STATE_LABEL[(db.episodes.find((x) => x.id === ep.id) || {}).state] || '完成'}`)); return; }
         try {
           E.act(db, ep.id, b.dataset.act, payload, nowISO(), ui.user, sla());

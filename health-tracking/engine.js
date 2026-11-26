@@ -1433,25 +1433,22 @@
     salt: '飲食：減鹽', sugar: '飲食：減糖／醣類控制', fat: '飲食：減油／飽和脂肪', exercise: '身體活動', weight: '體重控制',
     smoking: '戒菸', alcohol: '節酒', sleep: '睡眠與壓力', meds: '用藥遵從', monitor: '自我量測（居家血壓／血糖）',
   };
-  const COUNSEL_READINESS = { pre: '尚未考慮改變', contemplation: '考慮中', preparation: '準備開始', action: '已開始行動', maintenance: '維持中' };
   const COUNSEL_METHODS = ['面談', '電話', '視訊', '團體衛教'];
-  // 完整的紀錄：至少 1 個諮詢主題、改變準備度、具體目標、諮詢方式（時間可不填）
+  // 完整的紀錄：至少 1 個諮詢主題、諮詢方式（時間可不填）
   function cleanCounsel(c) {
     if (!c || typeof c !== 'object') return null;
     const topics = [...new Set((Array.isArray(c.topics) ? c.topics : [c.topics]).map(String))].filter((k) => COUNSEL_TOPICS[k]);
-    const readiness = COUNSEL_READINESS[c.readiness] ? c.readiness : null;
     const method = COUNSEL_METHODS.includes(c.method) ? c.method : null;
-    const goal = String(c.goal || '').trim().slice(0, 200);
     const m = num(c.minutes);
     const minutes = m !== null && m >= 1 && m <= 180 ? Math.round(m) : null;
-    if (!topics.length && !readiness && !goal && !method) return null;
-    const missing = [!topics.length && '諮詢主題', !readiness && '改變準備度', !goal && '具體目標', !method && '諮詢方式'].filter(Boolean);
+    if (!topics.length && !method) return null;
+    const missing = [!topics.length && '諮詢主題', !method && '諮詢方式'].filter(Boolean);
     if (missing.length) throw new Error('生活型態諮詢紀錄不完整，缺：' + missing.join('、'));
-    return { topics, readiness, goal, method, minutes };
+    return { topics, method, minutes };
   }
-  const validCounsel = (c) => !!(c && c.topics && c.topics.length && c.readiness && c.goal && c.method);
+  const validCounsel = (c) => !!(c && c.topics && c.topics.length && c.method);
   function counselText(c) {
-    return `生活型態諮詢（${c.method}${c.minutes ? ' ' + c.minutes + ' 分鐘' : ''}）：${c.topics.map((k) => COUNSEL_TOPICS[k]).join('、')}｜準備度：${COUNSEL_READINESS[c.readiness]}｜目標：${c.goal}`;
+    return `生活型態諮詢（${c.method}${c.minutes ? ' ' + c.minutes + ' 分鐘' : ''}）：${c.topics.map((k) => COUNSEL_TOPICS[k]).join('、')}`;
   }
   const DOWNGRADE_888 = { 2: '連續 2 個場次低於先前最高層級', 1: '任 1 個場次低於先前最高層級' };
 
@@ -1515,7 +1512,7 @@
 
   const Engine = {
     LEVELS, RANK, LEVEL_LABEL, LEVEL_MEANING, ITEMS, ITEM_LABEL, SYMPTOMS, SYMPTOM_BY_LABEL, ASSUMPTIONS, DEFAULT_SLA, CLOSE_REASONS,
-    STATES, OPEN_STATES, STATE_LABEL, isOpen, recheckOverdue, SCHEMA, migrateWorkflow, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, settings888, COUNSEL_TOPICS, COUNSEL_READINESS, COUNSEL_METHODS, validCounsel, counselText, DOWNGRADE_888, KEYS_888, cascade888,
+    STATES, OPEN_STATES, STATE_LABEL, isOpen, recheckOverdue, SCHEMA, migrateWorkflow, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, settings888, COUNSEL_TOPICS, COUNSEL_METHODS, validCounsel, counselText, DOWNGRADE_888, KEYS_888, cascade888,
     LIFESTYLE, lifestylePrescription, restartClock, SMOOTH, AVG_DAYS, AUTO_CLOSE, vitalKeys, sessionValue, evalAt, evaluateTimeline, expirePending, autoClose, DEFAULT_SITE_ALIASES, normalizeSite, parseSiteNurseSheet, applySiteNurses, RANGES, validateMeasurement, validateBackup, mergeRoster, importMeasurementRows, IMPORT_ALIAS, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
     maxLevel, evaluateSession, groupSessions, ingest, act, nextStep, quality, wilson, prescription,
     parseRoster, parseBirth, validTwId, maskId, maskName, ageAt, addDays, sameDay, normGluType, uid,

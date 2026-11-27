@@ -124,8 +124,8 @@
   }
   // CSV：防公式注入（文字以 = + - @ 或定位字元開頭時前置 '，避免在 Excel 被當成公式執行）
   function csv(rows) { return '\ufeff' + rows.map((r) => r.map((c) => { let s = String(c ?? ''); if (typeof c !== 'number' && /^[=+\-@\t\r]/.test(s)) s = "'" + s; return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }).join(',')).join('\r\n'); }
-  function exportCsv(name, rows, what) {
-    if ((SERVER || sensitive()) && !confirm('匯出的檔案含個人資料且未加密。請只存放在院內核可的加密位置，用畢刪除。確定匯出？')) return;
+  async function exportCsv(name, rows, what) {
+    if ((SERVER || sensitive()) && !(await ask('匯出的檔案含個人資料且未加密。請只存放在院內核可的加密位置，用畢刪除。確定匯出？', '匯出'))) return;
     if (SERVER) api('export-log', { what: what || name, count: Math.max(0, rows.length - 1) }).catch(() => {});
     else { audit('匯出', `${what || name}（${Math.max(0, rows.length - 1)} 列）`); save(); }
     download(name, csv(rows), 'text/csv');
@@ -146,6 +146,23 @@
       foot.appendChild(el);
     }
     dlg.showModal();
+  }
+  // 確認與輸入改用頁面內的對話框：瀏覽器內建的 confirm()/prompt() 在嵌入式頁面（例如 claude.ai 預覽）會被擋下而直接回傳「取消」
+  function ask(msg, okLabel = '確定') {
+    return new Promise((resolve) => {
+      let done = false; const fin = (v) => { if (!done) { done = true; resolve(v); } };
+      dialog('請確認', `<p style="white-space:pre-line">${esc(msg)}</p>`, [{ label: '取消', onClick: () => fin(false) }, { label: okLabel, primary: true, onClick: () => fin(true) }]);
+      $('#dlg').addEventListener('close', () => fin(false), { once: true });
+    });
+  }
+  function askText(msg, opts = {}) {
+    return new Promise((resolve) => {
+      let done = false; const fin = (v) => { if (!done) { done = true; resolve(v); } };
+      dialog('請輸入', `<p style="white-space:pre-line">${esc(msg)}</p><input id="ask-input" type="${opts.password ? 'password' : 'text'}" autocomplete="off" style="width:100%">`,
+        [{ label: '取消', onClick: () => fin(null) }, { label: opts.okLabel || '確定', primary: true, onClick: () => fin($('#ask-input').value) }]);
+      $('#dlg').addEventListener('close', () => fin(null), { once: true });
+      setTimeout(() => { const i = $('#ask-input'); if (i) i.focus(); }, 0);
+    });
   }
 
   // ───────────── 圖表（內嵌 SVG） ─────────────
@@ -226,9 +243,9 @@
     const views = { dashboard, worklist, residents, p: caseView, quality: qualityView, 888: view888, import: importView, rules: rulesView };
     app.innerHTML = banner + (views[route] || dashboard)(arg);
     const rg = $('#regrade-btn');
-    if (rg && SERVER) rg.onclick = () => { if (confirm('依目前規則重新判定所有進行中的追蹤輪次？')) srv(api('regrade', {}), (j) => `已重新判定：${j.changes} 案層級改變`); };
-    else if (rg) rg.onclick = () => {
-      if (!confirm('依目前規則，以每人最近一次量測重新判定所有開放中的追蹤案？變動會寫入各案的處理紀錄。')) return;
+    if (rg && SERVER) rg.onclick = async () => { if (await ask('依目前規則重新判定所有進行中的追蹤輪次？')) srv(api('regrade', {}), (j) => `已重新判定：${j.changes} 案層級改變`); };
+    else if (rg) rg.onclick = async () => {
+      if (!(await ask('依目前規則，以每人最近一次量測重新判定所有開放中的追蹤案？變動會寫入各案的處理紀錄。'))) return;
       const ch = E.regradeOpen(db, nowISO(), sla(), ui.user); audit('依新規則重新判定', `${ch.length} 案`); save(); render();
       const up = ch.filter((c) => E.RANK[c.to] > E.RANK[c.from]).length, down = ch.length - up;
       toast(`已重新判定：${ch.length} 案層級改變（升 ${up}、降或結案 ${down}）`);
@@ -867,8 +884,8 @@
       pendingSN = null; save(); render(); toast(`已套用；改派 ${moved} 案`);
     };
     const nb = $('#sn-norm');
-    if (nb) nb.onclick = () => {
-      if (!confirm('把名冊上的據點名稱統一成年度名單的寫法？（例如「秀水頭前」→「頭前社區」、「金齡關懷協會-1～86」→「永福教會松年團契」）')) return;
+    if (nb) nb.onclick = async () => {
+      if (!(await ask('把名冊上的據點名稱統一成年度名單的寫法？（例如「秀水頭前」→「頭前社區」、「金齡關懷協會-1～86」→「永福教會松年團契」）'))) return;
       if (SERVER) { srv(api('normalize-sites', {}), (j) => `已統一 ${j.changed} 位民眾的據點名稱`); return; }
       let n = 0; const aliases = db.settings && db.settings.siteAliases;
       for (const p of db.persons) { const to = E.normalizeSite(p.site, aliases); if (to !== p.site) { p.site = to; n++; } }
@@ -924,7 +941,7 @@
     if (!usersCache) api('users').then((j) => { usersCache = j.users; render(); }).catch((e) => toast(e.message));
     $('#u-add').onclick = () => userDialog(null);
     $$('[data-uedit]').forEach((b) => (b.onclick = () => userDialog(usersCache.find((x) => x.username === b.dataset.uedit))));
-    $$('[data-ureset]').forEach((b) => (b.onclick = () => { if (confirm(`重設 ${b.dataset.ureset} 的密碼？對方會被登出，需用臨時密碼重新登入。`)) api('users', { username: b.dataset.ureset, resetPassword: true }).then(showTempPassword).catch((e) => toast(e.message)); }));
+    $$('[data-ureset]').forEach((b) => (b.onclick = async () => { if (await ask(`重設 ${b.dataset.ureset} 的密碼？對方會被登出，需用臨時密碼重新登入。`)) api('users', { username: b.dataset.ureset, resetPassword: true }).then(showTempPassword).catch((e) => toast(e.message)); }));
     $$('[data-udis]').forEach((b) => (b.onclick = () => api('users', { username: b.dataset.udis, disabled: b.dataset.v === '1' }).then(showTempPassword).catch((e) => toast(e.message))));
     $('#audit-load').onclick = () => api('audit').then((j) => { auditCache = j; render(); }).catch((e) => toast(e.message));
     const ae = $('#audit-exp2'); if (ae) ae.onclick = () => exportCsv('伺服器稽核紀錄.csv', [['序號', '時間', '帳號', '來源IP', '動作', '對象', '內容', '雜湊'], ...auditCache.entries.map((a) => [a.seq, a.at, a.user, a.ip, a.action, a.target, a.detail, a.hash])], '伺服器稽核紀錄');
@@ -1066,7 +1083,7 @@
           $('#cv-btn').disabled = true; $('#cv-btn').textContent = '轉換中…';
           try { const r = await window.Vault.open(envelope, pw); resolve(r.data); } catch (e) { draw(e.message); }
         };
-        $('#cv-wipe').onclick = () => { if (prompt('此動作會永久刪除本機的舊資料。請輸入「清除」確認') !== '清除') return; localStorage.removeItem(KEY); resolve(null); };
+        $('#cv-wipe').onclick = async () => { if ((await askText('此動作會永久刪除本機的舊資料。請輸入「清除」確認')) !== '清除') return; localStorage.removeItem(KEY); resolve(null); };
       };
       draw();
     });
@@ -1205,8 +1222,8 @@
       $('#wl-state').onchange = (e) => { ui.wl.state = e.target.value; render(); };
       $('#wl-od').onchange = (e) => { ui.wl.overdue = e.target.checked; render(); };
       const rc = $('#restart-clock');
-      if (rc) rc.onclick = () => {
-        if (!confirm('讓尚未處理的逾期案件，期限從今天重新起算？')) return;
+      if (rc) rc.onclick = async () => {
+        if (!(await ask('讓尚未處理的逾期案件，期限從今天重新起算？'))) return;
         if (SERVER) { srv(api('restart-clock', {}), (j) => `已重新起算 ${j.count} 案的期限`); return; }
         const n = E.restartClock(db, nowISO(), sla(), ui.user); audit('期限重新起算', `${n} 案`); save(); render(); toast(`已重新起算 ${n} 案的期限`);
       };
@@ -1241,9 +1258,10 @@
       };
       if (!ep) return;
       $$('[data-print-rn]').forEach((b) => (b.onclick = (e) => { e.preventDefault(); const ta = $('#ep-form textarea[name=rnRx]'); printRx(p, Object.assign({}, ep, { rx: { text: ta.value } })); }));
-      $$('[data-act]').forEach((b) => (b.onclick = () => {
+      $$('[data-act]').forEach((b) => (b.onclick = async (e) => {
+        if (e) e.preventDefault();
         const fd = new FormData($('#ep-form')); let payload = Object.fromEntries(fd.entries());
-        if (b.dataset.act === 'novisit' && !confirm(`記錄為「尚未就醫（${payload.reason}）」並進入下一步？`)) return;
+        if (b.dataset.act === 'novisit' && !(await ask(`記錄為「尚未就醫（${payload.reason}）」並進入下一步（確認）？`, '尚未就醫，進入下一步'))) return;
         if (b.dataset.act === 'renotify') payload = { method: payload.rnMethod, note: payload.rnNote, rx: payload.rnRx };
         if (b.dataset.act === 'intervene') { const c = counselFrom(fd); for (const k of ['cTopic', 'cMethod', 'cMin']) delete payload[k]; if (c) payload.counsel = c; }
         if (SERVER) { srv(api(`episodes/${ep.id}/act`, { action: b.dataset.act, payload }), () => (b.dataset.act === 'renotify' ? (payload.rx ? '已記錄：補通知、重開處方' : '已記錄：補通知') : `已記錄：${E.STATE_LABEL[(db.episodes.find((x) => x.id === ep.id) || {}).state] || '完成'}`)); return; }
@@ -1252,9 +1270,9 @@
           save(); render(); toast(b.dataset.act === 'renotify' ? (payload.rx ? '已記錄：補通知、重開處方' : '已記錄：補通知') : `已記錄：${E.STATE_LABEL[db.episodes.find((x) => x.id === ep.id).state]}`);
         } catch (err) { toast(err.message); }
       }));
-      $('#close-btn').onclick = () => {
+      $('#close-btn').onclick = async () => {
         const reason = $('#close-reason').value;
-        if (!confirm(`確定以「${reason}」結案？`)) return;
+        if (!(await ask(`確定以「${reason}」結案？`, '結案'))) return;
         if (SERVER) { srv(api(`episodes/${ep.id}/act`, { action: 'close', payload: { reason, note: $('#close-note').value, followupDate: $('#close-followup').value } }), '已結案'); return; }
         try { E.act(db, ep.id, 'close', { reason, note: $('#close-note').value, followupDate: $('#close-followup').value }, nowISO(), ui.user, sla()); audit('結案', `${p.name}：${reason}`); save(); render(); toast('已結案'); } catch (err) { toast(err.message); }
       };
@@ -1277,7 +1295,7 @@
       $('#roster-file').onchange = (e) => { const f = e.target.files[0]; if (f) readWorkbook(f).then(previewRoster).then(() => {
         $('#roster-go').onclick = async () => {
           if (SERVER) { srv(api('roster', { persons: pendingRoster.all }), (j) => { pendingRoster = null; return `已新增 ${j.result.add} 位、更新 ${j.result.upd} 位${j.result.denied ? `；${j.result.denied} 位不在你負責的據點，未匯入` : ''}`; }); return; }
-          if (db.demo && !confirm('匯入正式名冊會清除示範資料，確定？')) return;
+          if (db.demo && !(await ask('匯入正式名冊會清除示範資料，確定？', '匯入'))) return;
           commitRoster();
         };
         $('#roster-issues').onclick = () => exportCsv('名冊問題清單.csv', [['工作表', '列', '姓名', '問題'], ...pendingRoster.issues.map((i) => [i.sheet, i.row, i.name, i.issues.join('；')])], '名冊問題清單');
@@ -1291,9 +1309,9 @@
       $('#tpl').onclick = () => download('量測匯入範本.csv', csv([M_COLS.map((c) => c[0]), [db.persons[0] ? (db.persons[0].demoId || '請填身分證號') : 'A123456789', '2026-10-30 09:15', 138, 86, 78, '', 96, 36.5, 112, '空腹', 135, 160, 48, '', '', 62.5, 86, 31.2, '']]), 'text/csv');
       if (SERVER) return;
       // 備份：明文 JSON（含個資時先提醒妥善保管）
-      $('#bk-exp').onclick = () => {
+      $('#bk-exp').onclick = async () => {
         const name = `健康站追蹤備份_${fmtD(nowISO()).replace(/\//g, '')}.json`;
-        if (sensitive() && !confirm('備份檔未加密，含姓名、身分證號與健康資料。請只存放在院內受管控的位置，不要寄送或上傳到雲端。繼續匯出？')) return;
+        if (sensitive() && !(await ask('備份檔未加密，含姓名、身分證號與健康資料。請只存放在院內受管控的位置，不要寄送或上傳到雲端。繼續匯出？', '匯出'))) return;
         audit('匯出備份', name); save();
         download(name, JSON.stringify(db), 'application/json');
       };
@@ -1303,18 +1321,18 @@
         f.text().then(async (t) => {
           let d = JSON.parse(t);
           if (window.Vault.isEnvelope(d)) { // 舊版加密備份
-            const pw = prompt('這是舊版加密備份，請輸入當時的通行密語'); if (!pw) return;
+            const pw = await askText('這是舊版加密備份，請輸入當時的通行密語', { password: true }); if (!pw) return;
             d = (await window.Vault.open(d, pw, 'chc-backup')).data;
           }
           E.validateBackup(d);
-          if (!confirm(`以備份覆蓋目前資料？（${d.persons.length} 位民眾、${d.episodes.length} 個追蹤輪次）`)) return;
+          if (!(await ask(`以備份覆蓋目前資料？（${d.persons.length} 位民眾、${d.episodes.length} 個追蹤輪次）`, '還原'))) return;
           db = d;
           if (!db.demo && db.schema !== E.SCHEMA) E.migrateWorkflow(db);
           audit('還原備份', f.name); save(); render(); toast('已還原備份');
         }).catch((err) => toast(err.message));
       };
-      $('#demo-load').onclick = () => { if (!confirm('以示範資料覆蓋目前所有資料？（正式資料會被刪除，請先匯出備份）')) return; db = window.Demo.generate(new Date()); save(); render(); };
-      $('#wipe').onclick = () => { if (!confirm('清除全部資料（無法復原）？建議先匯出備份。')) return; audit('清除全部資料', ''); db = { persons: [], measurements: [], episodes: [], audit: db.audit, settings: db.settings, rulesVersion: E.RULES_VERSION, schema: E.SCHEMA }; save(); render(); };
+      $('#demo-load').onclick = async () => { if (!(await ask('以示範資料覆蓋目前所有資料？（正式資料會被刪除，請先匯出備份）'))) return; db = window.Demo.generate(new Date()); save(); render(); };
+      $('#wipe').onclick = async () => { if (!(await ask('清除全部資料（無法復原）？建議先匯出備份。', '清除'))) return; audit('清除全部資料', ''); db = { persons: [], measurements: [], episodes: [], audit: db.audit, settings: db.settings, rulesVersion: E.RULES_VERSION, schema: E.SCHEMA }; save(); render(); };
     },
     888() {
       $$('[data-gap]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); ui.gap888 = a.dataset.gap; render(); }));

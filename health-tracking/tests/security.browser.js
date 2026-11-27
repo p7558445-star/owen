@@ -9,6 +9,7 @@ const BASE = 'http://localhost:8765/index.html';
 const OLD_PASS = '彰基社區健康站測試通行密語2026'; // 舊版加密資料的通行密語
 const R = []; const ok = (name, cond, extra = '') => { R.push([cond ? 'PASS' : 'FAIL', name, extra]); };
 const toast = (pg) => pg.$eval('#toast', (t) => t.textContent);
+const okDlg = async (pg, text) => { await pg.waitForTimeout(200); if (text !== undefined) await pg.fill('#ask-input', text); await pg.click('#dlg-foot .btn.primary'); await pg.waitForTimeout(300); };
 const login = async (pg, u = 'D7500', p = 'D7500') => { await pg.fill('#ll-u', u); await pg.fill('#ll-p', p); await pg.click('#ll-btn'); await pg.waitForTimeout(900); };
 (async () => {
   const b = await chromium.launch();
@@ -19,8 +20,9 @@ const login = async (pg, u = 'D7500', p = 'D7500') => { await pg.fill('#ll-u', u
   pg.on('pageerror', (e) => errs.push(e.message));
   const failed = []; pg.on('requestfailed', (r) => failed.push(r.url() + ' ' + (r.failure() || {}).errorText));
   const finished = []; pg.on('requestfinished', (r) => finished.push(r.url()));
-  let promptAnswer = '', alertFired = false;
-  pg.on('dialog', async (d) => { if (d.type() === 'alert') alertFired = true; if (d.type() === 'prompt') await d.accept(promptAnswer); else await d.accept(); });
+  let alertFired = false, nativeDialogs = 0;
+  // 內建 confirm／prompt 在嵌入式預覽會被擋下，系統應全部改用頁面內對話框
+  pg.on('dialog', async (d) => { nativeDialogs++; if (d.type() === 'alert') alertFired = true; await d.dismiss(); });
 
   await pg.goto(BASE); await pg.evaluate(() => { localStorage.clear(); sessionStorage.clear(); }); await pg.reload(); await pg.waitForTimeout(600);
   ok('開啟時先要求登入，未登入看不到任何頁面', !!(await pg.$('#ll-u')) && (await pg.$$('nav.tabs a')).length === 0);
@@ -58,7 +60,9 @@ const login = async (pg, u = 'D7500', p = 'D7500') => { await pg.fill('#ll-u', u
 
   await pg.goto(BASE + '#/import'); await pg.waitForTimeout(200);
   await pg.setInputFiles('#roster-file', FIX + '/evil_roster.xlsx'); await pg.waitForTimeout(800);
-  await pg.click('#roster-go'); await pg.waitForTimeout(600);
+  await pg.click('#roster-go'); await pg.waitForTimeout(300);
+  ok('匯入正式名冊前以頁面內對話框確認（會清除示範資料）', /清除示範資料/.test(await pg.$eval('#dlg-body', (x) => x.textContent)));
+  await okDlg(pg); await pg.waitForTimeout(300);
   ok('匯入名冊不再要求通行密語', !(await pg.$eval('#dlg', (d) => d.open)) && /已新增/.test(await toast(pg)), await toast(pg));
   await pg.goto(BASE + '#/residents'); await pg.waitForTimeout(400);
   const html = await pg.$eval('main', (m) => m.innerHTML);
@@ -72,7 +76,8 @@ const login = async (pg, u = 'D7500', p = 'D7500') => { await pg.fill('#ll-u', u
   if (await pg.$('#show-nid')) await pg.click('#show-nid');
   await pg.goto(BASE + '#/rules'); await pg.waitForTimeout(300);
   ok('設定頁明示資料未加密', /未加密/.test(await pg.$eval('main', (m) => m.textContent)));
-  const [dl] = await Promise.all([pg.waitForEvent('download'), pg.click('#audit-exp')]);
+  await pg.click('#audit-exp'); await pg.waitForTimeout(200);
+  const [dl] = await Promise.all([pg.waitForEvent('download'), pg.click('#dlg-foot .btn.primary')]);
   const auditCsv = fs.readFileSync(await dl.path(), 'utf8');
   await pg.goto(BASE + '#/import'); await pg.goto(BASE + '#/rules'); await pg.waitForTimeout(300);
   const want = ['匯入名冊', '查看完整身分證號', '匯出'];
@@ -87,20 +92,21 @@ const login = async (pg, u = 'D7500', p = 'D7500') => { await pg.fill('#ll-u', u
 
   // 備份：明文匯出前提醒；舊版加密備份仍可用舊密語開啟，竄改者被拒
   await pg.goto(BASE + '#/import'); await pg.waitForTimeout(200);
-  const [bk] = await Promise.all([pg.waitForEvent('download'), pg.click('#bk-exp')]);
+  await pg.click('#bk-exp'); await pg.waitForTimeout(200);
+  const [bk] = await Promise.all([pg.waitForEvent('download'), pg.click('#dlg-foot .btn.primary')]);
   const bkPath = FIX + '/backup.json'; await bk.saveAs(bkPath);
   ok('備份可匯出（明文 JSON）並可還原', JSON.parse(fs.readFileSync(bkPath, 'utf8')).persons.length > 0);
   const legacy = await pg.evaluate(async (pw) => { const k = await window.Vault.createKey(pw); return window.Vault.seal(k, JSON.parse(localStorage.getItem('chc-tracking-v1')), 'chc-backup'); }, OLD_PASS);
   fs.writeFileSync(FIX + '/legacy.json', JSON.stringify(legacy));
   const tampered = JSON.parse(JSON.stringify(legacy)); const ct = Buffer.from(tampered.ct, 'base64'); ct[10] ^= 1; tampered.ct = ct.toString('base64'); fs.writeFileSync(FIX + '/tampered.json', JSON.stringify(tampered));
-  promptAnswer = OLD_PASS; await pg.setInputFiles('#bk-imp', FIX + '/tampered.json'); await pg.waitForTimeout(1500);
+  await pg.setInputFiles('#bk-imp', FIX + '/tampered.json'); await okDlg(pg, OLD_PASS); await pg.waitForTimeout(1500);
   ok('竄改過的舊版加密備份被拒絕', /竄改/.test(await toast(pg)));
   fs.writeFileSync(FIX + '/evil_plain.json', JSON.stringify({ persons: [{ id: 'x" onmouseover="alert(1)', name: 'a' }], measurements: [], episodes: [] }));
   await pg.goto(BASE + '#/import'); await pg.waitForTimeout(200);
   await pg.setInputFiles('#bk-imp', FIX + '/evil_plain.json'); await pg.waitForTimeout(500);
   ok('含注入內容的備份被拒絕', /驗證失敗/.test(await toast(pg)));
   await pg.goto(BASE + '#/import'); await pg.waitForTimeout(200);
-  await pg.setInputFiles('#bk-imp', FIX + '/legacy.json'); await pg.waitForTimeout(2000);
+  await pg.setInputFiles('#bk-imp', FIX + '/legacy.json'); await okDlg(pg, OLD_PASS); await pg.waitForTimeout(1500); await okDlg(pg); await pg.waitForTimeout(500);
   ok('舊版加密備份輸入舊密語可還原', /已還原/.test(await toast(pg)));
 
   // 變更帳號密碼
@@ -117,6 +123,7 @@ const login = async (pg, u = 'D7500', p = 'D7500') => { await pg.fill('#ll-u', u
   await login(pg, 'D7500', 'NewPass2026');
   ok('新密碼可登入', !(await pg.$('#ll-u')) && (await pg.$$('nav.tabs a')).length > 0);
   ok('全程無 JavaScript 錯誤', errs.length === 0, errs.join(' | '));
+  ok('全程未使用瀏覽器內建對話框（嵌入式預覽也能操作）', nativeDialogs === 0, nativeDialogs + ' 次');
 
   // 舊版加密的本機資料：登入後輸入舊密語一次，轉成新格式
   const p3 = await (await b.newContext()).newPage(); const e3 = []; p3.on('pageerror', (e) => e3.push(e.message));

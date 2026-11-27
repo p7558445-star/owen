@@ -501,6 +501,46 @@ t('mid-round upgrade to red still goes back to detect for same-day notice', () =
   assert.equal(ep.level, 'red'); assert.equal(ep.state, 'detected'); assert.equal(ep.notify, undefined); assert.equal(ep.upgradeNotice, undefined);
 });
 
+// ── 同場次多次血壓取平均
+t('BP: readings within one session are averaged', () => {
+  const r = item('bp', [{ sbp: 150, dbp: 85 }, { sbp: 170, dbp: 95 }]);
+  assert.equal(r.level, 'orange'); assert.ok(r.value.includes('同場 2 次平均')); assert.deepEqual(r.data, { sbp: 160, dbp: 90 });
+  const red = item('bp', [{ sbp: 185, dbp: 100 }, { sbp: 176, dbp: 98 }]);
+  assert.equal(red.level, 'red', 'mean 180.5 stays red'); assert.ok(!red.provisional, 'retested: confirmed');
+  assert.equal(item('bp', [{ sbp: 165, dbp: 85 }, { sbp: 150, dbp: 85 }]).level, 'yellow', 'mean 157.5 is yellow');
+  assert.equal(E.sessionValue('bp', [{ sbp: 150, dbp: 85 }, { sbp: 170, dbp: 95 }])[0], 160);
+});
+
+// ── 處理中降級：最近 2 週 7 天平均皆低於本輪層級 → 降一級
+t('step-down: orange round with 2 weeks of lower 7-day means drops to yellow, steps kept', () => {
+  const db = db0();
+  const { episode: ep } = add2(db, D(1), { sbp: 165, dbp: 85 });
+  E.act(db, ep.id, 'notify', {}, D(2)); E.act(db, ep.id, 'intervene', { rx: 'x' }, D(3));
+  add(db, D(9), { sbp: 145, dbp: 80 }); add(db, D(12), { sbp: 142, dbp: 80 });
+  assert.equal(ep.level, 'orange', 'level set less than 2 weeks ago');
+  add(db, D(16), { sbp: 140, dbp: 82 });
+  assert.equal(ep.level, 'yellow'); assert.equal(ep.state, 'intervened'); assert.ok(ep.notify && ep.intervene);
+  assert.ok(ep.log[ep.log.length - 1].text.includes('降一級：橙 → 黃'));
+  assert.ok(ep.items.find((i) => i.key === 'bp').level === 'yellow');
+  E.act(db, ep.id, 'confirm', { result: '處方完成' }, D(21));
+  assert.equal(ep.state, 'confirmed', 'yellow confirm needs no visit date');
+});
+t('step-down: blocked by any orange 7-day mean, by red, by non-vital items, or a single week of data', () => {
+  const db = db0();
+  const { episode: ep } = add2(db, D(1), { sbp: 165, dbp: 85 });
+  add(db, D(9), { sbp: 145, dbp: 80 }); add(db, D(12), { sbp: 175, dbp: 80 }); add(db, D(16), { sbp: 140, dbp: 82 }); add(db, D(20), { sbp: 143, dbp: 80 });
+  assert.equal(ep.level, 'orange', 'D12 7-day mean (160) is orange');
+  const db2 = db0(); const { episode: e2 } = add(db2, D(1), { sbp: 185, dbp: 112 });
+  [9, 12, 16, 20].forEach((d) => add(db2, D(d), { sbp: 130, dbp: 80 }));
+  assert.equal(e2.level, 'red');
+  const db3 = db0(); const { episode: e3 } = add(db3, D(1), { glucose: 130, glucoseType: '空腹' });
+  [9, 12, 16, 20].forEach((d) => add(db3, D(d), { sbp: 140, dbp: 80 }));
+  assert.equal(e3.level, 'orange');
+  const db4 = db0(); const { episode: e4 } = add2(db4, D(1), { sbp: 165, dbp: 85 }); E.act(db4, e4.id, 'notify', {}, D(2));
+  [15, 17, 19, 21].forEach((d) => add(db4, D(d), { sbp: 145, dbp: 80 }));
+  assert.equal(e4.level, 'orange', 'only one week covered');
+});
+
 // ── 健康888 要介入：已介入且有結構化生活型態諮詢紀錄
 const COUNSEL = { topics: ['salt', 'exercise'], method: '面談', minutes: '15' };
 t('888 intervene default: intervened AND a complete structured counseling record', () => {

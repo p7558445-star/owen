@@ -61,6 +61,8 @@
     '代謝症候群五項未量齊且已符合項數 <3 時，標示為「資料不足」或「至少黃」，不判綠。',
     '單次量測達紅層（血壓、心律、血氧）或需重測確認的橙層（心律、低體溫），先以「暫定」層級派案，不因等待重測而延誤；同一場次 60 分鐘內的重測會自動重新判定。',
     '血壓、脈搏、血氧的黃、橙層以 7 天內至少 2 個場次的平均判定（院內決議 2026/11）；7 天內只量 1 次者標「暫定」、不開案，7 天內未再量測則以該次開案。紅層、有症狀、心律 ARR 旗標、現場重測 3 次的血氧仍單次即判定。',
+    '同一場次（60 分鐘內）量多次血壓，取所有讀值的平均（院內決議 2026/11）；脈搏、血氧維持文件的現場重測規則。',
+    '處理中降級：只因血壓／脈搏／血氧開案的橙層輪次，最近 2 週（兩個 7 天各至少 1 次）每次量測的 7 天平均都低於橙層，降為黃層，步驟不變；紅層與黃層不在處理中降級。',
     '「偵測」階段尚未通知、非紅層、只因血壓／脈搏／血氧異常的輪次，之後連續 2 個場次全部正常且 7 天平均也正常，系統自動結案（原因：後續量測連續 2 次正常）。',
     '脈搏 50–59 但有症狀：文件僅定義無症狀為黃，本系統升為橙。',
     '血糖 <70 但無症狀或未用藥：文件未定義，本系統暫列橙（需醫師評估），並提示補充糖分。',
@@ -75,7 +77,7 @@
 
   // 處理時限（天），可由設定覆寫
   // 分層規則版本：閾值或計入整體層級的規則有變動時更新，後台據此提示重新判定開放中的追蹤案
-  const RULES_VERSION = '2026-11-07';
+  const RULES_VERSION = '2026-11-27';
   const REGRADE_CLOSE = '規則更新後重新判定為綠層';
 
   const DEFAULT_SLA = {
@@ -104,12 +106,21 @@
     return readings.map((r) => num(r[field])).filter((v) => v !== null);
   }
 
+  // 同一場次（60 分鐘內）的血壓：所有讀值的平均（依高血壓指引，量 2 次取平均）
+  function bpOf(rs) {
+    const ps = rs.map((r) => [num(r.sbp), num(r.dbp)]).filter(([a, b]) => a !== null && b !== null);
+    if (!ps.length) return null;
+    const avg = (j) => Math.round((ps.reduce((t, p) => t + p[j], 0) / ps.length) * 10) / 10;
+    return { sbp: avg(0), dbp: avg(1), n: ps.length };
+  }
+
   // ───────────────────────── 各項目判定 ─────────────────────────
   function evalBP(rs, sx) {
-    const s = series(rs, 'sbp'), d = series(rs, 'dbp');
-    if (!s.length || !d.length) return null;
-    const sbp = s[s.length - 1], dbp = d[d.length - 1];
-    const v = `${fmt(sbp)}/${fmt(dbp)}`;
+    const bp = bpOf(rs);
+    if (!bp) return null;
+    const s = { length: bp.n };
+    const { sbp, dbp } = bp;
+    const v = `${fmt(sbp, 1)}/${fmt(dbp, 1)}${bp.n > 1 ? `（同場 ${bp.n} 次平均）` : ''}`;
     const bpSx = has(sx, 'chest_pain', 'severe_headache', 'slurred_speech', 'limb_weakness');
     // 院內修訂版（2026/11）：綠 <140/90；黃 140–159 或 90–99；橙 160–179 或 100–109；紅 ≥180 或 ≥110
     if (sbp >= 180 || dbp >= 110) {
@@ -272,7 +283,8 @@
   function evalMetS(rs, sx, person) {
     const sex = person && person.sex;
     const last = (f) => series(rs, f).pop() ?? null;
-    const waist = last('waist'), sbp = last('sbp'), dbp = last('dbp'), tg = last('tg'), hdl = last('hdl');
+    const bp = bpOf(rs);
+    const waist = last('waist'), sbp = bp ? bp.sbp : null, dbp = bp ? bp.dbp : null, tg = last('tg'), hdl = last('hdl');
     const fpgReading = rs.filter((r) => num(r.glucose) !== null && normGluType(r.glucoseType) === 'fasting').pop();
     const fpg = fpgReading ? num(fpgReading.glucose) : null;
     const comps = [
@@ -331,7 +343,7 @@
   function itemData(key, rs, r) {
     const last = (f) => { const v = series(rs, f); return v.length ? v[v.length - 1] : null; };
     switch (key) {
-      case 'bp': return { sbp: last('sbp'), dbp: last('dbp') };
+      case 'bp': { const bp = bpOf(rs); return { sbp: bp ? bp.sbp : null, dbp: bp ? bp.dbp : null }; }
       case 'pulse': return { hr: last('pulse') };
       case 'spo2': return { x: last('spo2') };
       case 'temp': return { x: last('temp') };
@@ -394,7 +406,7 @@
   // 一個場次的代表值（與單次判定相同：場次內最後一筆）
   function sessionValue(key, rs) {
     const last = (f) => { const v = series(rs, f); return v.length ? v[v.length - 1] : null; };
-    if (key === 'bp' || key === 'mets') { const a = last('sbp'), b = last('dbp'); return a === null || b === null ? null : [a, b]; }
+    if (key === 'bp' || key === 'mets') { const bp = bpOf(rs); return bp ? [bp.sbp, bp.dbp] : null; }
     const x = last(key === 'pulse' ? 'pulse' : 'spo2');
     return x === null ? null : [x];
   }
@@ -438,7 +450,7 @@
     const m = items.mets, b = items.bp;
     if (!m || !b || m.level === 'na') return;
     if (b.avg) {
-      const r2 = evalMetS([...readings, { sbp: b.avg.mean[0], dbp: b.avg.mean[1] }], sx, person);
+      const r2 = evalMetS([...readings.map((r) => Object.assign({}, r, { sbp: null, dbp: null })), { sbp: b.avg.mean[0], dbp: b.avg.mean[1] }], sx, person);
       if (r2) items.mets = Object.assign(r2, { data: itemData('mets', readings, r2), notes: r2.notes.concat(['血壓條件以 7 天平均判定']) });
       return;
     }
@@ -715,6 +727,31 @@
     return true;
   }
 
+  // 處理中降級：本輪只因血壓、脈搏、血氧（非紅層、高於黃層），最近 2 週（兩個 7 天各至少 1 次量測）
+  // 每一次量測的 7 天平均都低於本輪層級 → 降一級（最低到黃層），步驟不變，寫入處理紀錄
+  const STEP_DOWN_DAYS = 14;
+  function stepDown(ep, person, sessions, at, sla, by) {
+    if (ep.level === 'red' || RANK[ep.level] <= 1) return false;
+    const { keys, only } = vitalKeys(ep);
+    if (!only || !keys.length) return false;
+    const last = sessions[sessions.length - 1];
+    const tEnd = new Date(last.at), tStart = new Date(tEnd - STEP_DOWN_DAYS * 86400000), tMid = new Date(tEnd - AVG_MS);
+    const basis = ep.basisSessionIds || [ep.levelSessionId || ep.detectSessionId];
+    const basisAt = sessions.filter((s) => basis.includes(s.id)).reduce((m, s) => (new Date(s.at) > new Date(m) ? s.at : m), ep.detectedAt);
+    if (new Date(basisAt) > tStart) return false; // 本輪層級成立未滿 2 週
+    const idx = sessions.map((s, i) => i).filter((i) => { const t = new Date(sessions[i].at); return t > tStart && t <= tEnd && keys.some((k) => sessionValue(k, sessions[i].readings)); });
+    if (!idx.some((i) => new Date(sessions[i].at) <= tMid) || !idx.some((i) => new Date(sessions[i].at) > tMid)) return false;
+    const lv = idx.map((i) => { const ev = evalAt(person, sessions, i); return maxLevel(keys.map((k) => ev.items[k]).filter((r) => r && r.level !== 'na').map((r) => r.level)); });
+    if (lv.some((l) => RANK[l] >= RANK[ep.level])) return false;
+    const prev = ep.level, nl = LEVELS[RANK[prev] - 1];
+    ep.level = nl; ep.levelAt = at; ep.basisSessionIds = idx.map((i) => sessions[i].id); ep.levelSessionId = last.id;
+    ep.items = ep.items.map((i) => ((keys.includes(i.key) || (i.key === 'mets' && keys.includes('bp'))) && RANK[i.level] > RANK[nl] ? Object.assign({}, i, { level: nl, reason: `${i.reason}（處理中降級）` }) : i));
+    ep.due = computeDue(ep, sla || DEFAULT_SLA, ep.items);
+    if (ep.upgradeNotice && !ep.upgradeNotice.done) delete ep.upgradeNotice;
+    log(ep, at, 'regraded', `最近 2 週共 ${idx.length} 次量測，7 天平均皆低於${LEVEL_LABEL[prev]}層，降一級：${LEVEL_LABEL[prev]} → ${LEVEL_LABEL[nl]}，步驟不變`, by);
+    return true;
+  }
+
   // 輪次中的血壓、脈搏、血氧異常項目；only＝本輪只因這些項目（含只因血壓條件而符合 1–2 項的代謝症候群）
   function vitalKeys(ep) {
     const abn = ep.items.filter((i) => !i.lifestyle && RANK[i.level] >= 1);
@@ -771,6 +808,7 @@
         return { ev, episode: ep };
       }
       if (autoClose(ep, person, sessions, ev, at)) return { ev, episode: ep };
+      if (stepDown(ep, person, sessions, at, sla)) return { ev, episode: ep };
       log(ep, at, 'measured', `新量測（${measuredText(ev)}）`);
       return { ev, episode: ep };
     }
@@ -1513,7 +1551,7 @@
   const Engine = {
     LEVELS, RANK, LEVEL_LABEL, LEVEL_MEANING, ITEMS, ITEM_LABEL, SYMPTOMS, SYMPTOM_BY_LABEL, ASSUMPTIONS, DEFAULT_SLA, CLOSE_REASONS,
     STATES, OPEN_STATES, STATE_LABEL, isOpen, recheckOverdue, SCHEMA, migrateWorkflow, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, settings888, COUNSEL_TOPICS, COUNSEL_METHODS, validCounsel, counselText, DOWNGRADE_888, KEYS_888, cascade888,
-    LIFESTYLE, lifestylePrescription, restartClock, SMOOTH, AVG_DAYS, AUTO_CLOSE, vitalKeys, sessionValue, evalAt, evaluateTimeline, expirePending, autoClose, DEFAULT_SITE_ALIASES, normalizeSite, parseSiteNurseSheet, applySiteNurses, RANGES, validateMeasurement, validateBackup, mergeRoster, importMeasurementRows, IMPORT_ALIAS, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
+    LIFESTYLE, lifestylePrescription, restartClock, SMOOTH, AVG_DAYS, AUTO_CLOSE, vitalKeys, stepDown, bpOf, sessionValue, evalAt, evaluateTimeline, expirePending, autoClose, DEFAULT_SITE_ALIASES, normalizeSite, parseSiteNurseSheet, applySiteNurses, RANGES, validateMeasurement, validateBackup, mergeRoster, importMeasurementRows, IMPORT_ALIAS, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
     maxLevel, evaluateSession, groupSessions, ingest, act, nextStep, quality, wilson, prescription,
     parseRoster, parseBirth, validTwId, maskId, maskName, ageAt, addDays, sameDay, normGluType, uid,
   };

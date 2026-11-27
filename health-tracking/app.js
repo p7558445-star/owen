@@ -26,8 +26,8 @@
     try { const s = localStorage.getItem(KEY); if (s) return JSON.parse(s); } catch (e) { /* 忽略 */ }
     return null;
   }
-  // 示範資料以明文存放；正式資料（含姓名、身分證號等個資）一律以 AES-256-GCM 加密後才寫入瀏覽器
-  let vaultKey = null;
+  // 單機版：以帳號密碼登入；資料以明文（JSON）存在這台電腦的瀏覽器（院內決議 2026/11，不再使用通行密語加密）
+  let loggedIn = false;
   let saving = Promise.resolve();
   const sensitive = () => db && !db.demo && db.persons.length > 0;
   // ── 伺服器模式（院內主機）：資料、規則判定、稽核都在伺服器端；前端只呼叫 API
@@ -48,18 +48,14 @@
   function save() {
     if (SERVER) return true;
     if (!db) return false;
-    if (sensitive() && !vaultKey) { toast('含個資的資料必須先設定通行密語才能儲存'); requirePassphrase(); return false; }
     const snapshot = JSON.stringify(db);
     const write = async () => {
-      try {
-        const payload = vaultKey && !db.demo ? JSON.stringify(await window.Vault.seal(vaultKey, JSON.parse(snapshot))) : snapshot;
-        localStorage.setItem(KEY, payload);
-      } catch (e) { toast('無法儲存到瀏覽器（空間不足或已停用），請先匯出備份'); }
+      try { localStorage.setItem(KEY, snapshot); } catch (e) { toast('無法儲存到瀏覽器（空間不足或已停用），請先匯出備份'); }
     };
     saving = saving.then(write, write);
     return true;
   }
-  // 稽核紀錄：敏感操作留痕（存在加密資料內）。注意：操作者為自選，正式上線需搭配院內帳號登入
+  // 稽核紀錄：敏感操作留痕（存在本機資料內）。注意：操作者為自選，多人共用請用院內主機版
   function audit(action, detail) {
     if (SERVER || !db || db.demo) return;
     db.audit = db.audit || [];
@@ -208,8 +204,8 @@
     $('#site-filter').innerHTML = `<option value="all">全部據點</option>` + sites.map((s) => `<option ${s === ui.site ? 'selected' : ''}>${esc(s)}</option>`).join('');
     if (SERVER) { ui.user = SERVER.user.name; $('#user-sel').innerHTML = `<option>${esc(SERVER.user.name)}</option>`; $('#user-sel').disabled = true; }
     const ns = nurses(); if (!SERVER && !ns.includes(ui.user)) ui.user = ns[0];
-    $('#lock-btn').hidden = !vaultKey && !SERVER;
-    $('#lock-btn').textContent = SERVER ? '登出' : '🔒 鎖定';
+    $('#lock-btn').hidden = !loggedIn && !SERVER;
+    $('#lock-btn').textContent = '登出';
     $('#user-sel').innerHTML = ns.map((n) => `<option ${n === ui.user ? 'selected' : ''}>${esc(n)}</option>`).join('');
     const route = (location.hash.slice(2) || 'dashboard').split('/')[0];
     const now = new Date();
@@ -744,11 +740,10 @@
       <p class="small muted">缺身分證號者仍會建檔，但無法自動對應設備資料。</p>`;
   }
 
-  function commitRoster(newKey) {
+  function commitRoster() {
     if (!pendingRoster) return;
     if (db.demo) { db = { persons: [], measurements: [], episodes: [], settings: db.settings, rulesVersion: E.RULES_VERSION, schema: E.SCHEMA }; }
     const { add, upd } = E.mergeRoster(db, pendingRoster.all);
-    if (newKey) audit('設定通行密語', '匯入名冊前設定，資料開始加密');
     audit('匯入名冊', `新增 ${add} 位、更新 ${upd} 位`);
     pendingRoster = null; save(); render(); toast(`已新增 ${add} 位、更新 ${upd} 位`);
   }
@@ -778,7 +773,7 @@
         <span class="muted">略過</span><span>已匯入過 ${r.dup}、時間無法解析 ${r.bad}、數值不合理 ${r.invalid}${r.denied ? `、無權限 ${r.denied}` : ''}、找不到民眾 ${r.unmatched.length} 人</span>
       </div>
       ${!r.added && r.dup ? `<p class="small" style="margin:8px 0 0;padding:8px;border-radius:6px;background:var(--lv-green-bg);color:var(--lv-green-ink)">✓ 這份檔案的量測都已經在系統中（${r.dup} 筆，比對民眾與量測時間），<strong>不需要再匯入</strong>。重複匯入不會造成重複計算。若要匯入新資料，請從設備匯出較新的日期區間。</p>` : r.dup ? `<p class="small muted" style="margin:6px 0 0">其中 ${r.dup} 筆先前已匯入過，會自動略過，只匯入新的 ${r.added} 筆。</p>` : ''}
-      ${db.demo ? '<p class="small" style="margin:8px 0 0;color:var(--warn-ink)">目前是示範資料：確認匯入時會清除示範資料，並依量測檔自動建檔，同時要求設定通行密語加密。</p>' : ''}
+      ${db.demo ? '<p class="small" style="margin:8px 0 0;color:var(--warn-ink)">目前是示範資料：確認匯入時會清除示範資料，並依量測檔自動建檔。</p>' : ''}
       ${(r.badFormat || []).length ? `<p class="small" style="margin:6px 0 0;color:var(--warn-ink)">識別值格式不符 ${r.badFormat.length} 人：${r.badFormat.slice(0, 12).map(esc).join('、')}${r.badFormat.length > 12 ? '…' : ''}。身分證號應為 10 碼（1 個英文字母＋9 個數字）；少一碼、多一碼或臨時編號都無法對應，自動建檔也不會建立。請在設備或 App 端更正個人資料後，再匯出、匯入一次（已匯入的資料會自動略過）。</p>` : ''}
       ${(r.notInRoster || []).length && !r.created ? `<p class="small muted" style="margin:6px 0 0">名冊中沒有 ${r.notInRoster.length} 人：${r.notInRoster.slice(0, 12).map(esc).join('、')}${r.notInRoster.length > 12 ? '…' : ''}${$('#meas-create') ? '。若要一併建檔，請勾選上方「自動建檔」。' : '。請先由管理者匯入名冊。'}</p>` : ''}
       <div class="row" style="margin-top:10px"><button class="btn primary" id="meas-go" type="button" ${r.added ? '' : 'disabled'}>確認匯入 ${r.added} 筆</button><button class="btn" id="meas-cancel" type="button">取消</button></div>
@@ -798,12 +793,8 @@
     let createMissing = !!($('#meas-create') && $('#meas-create').checked);
     // 示範資料裡沒有真實民眾：清除示範資料並依量測檔自動建檔（預覽已提示）
     if (db.demo) createMissing = true;
-    // 會寫入真實個資：先設定通行密語（加密）
-    if (!vaultKey && (createMissing || sensitive()) && !(await passphraseDialog('設定通行密語', '量測檔含姓名與身分證號，匯入前必須設定通行密語加密。'))) return;
-    const fresh = db.demo;
     if (db.demo) db = { persons: [], measurements: [], episodes: [], settings: db.settings, rulesVersion: E.RULES_VERSION, schema: E.SCHEMA };
     const r = E.importMeasurementRows(db, rows, sla(), null, { createMissing });
-    if (fresh) audit('設定通行密語', '匯入量測前設定，資料開始加密');
     audit('匯入量測', `${r.added} 筆、新建檔 ${r.created}`);
     pendingMeas = null;
     save(); render(); showImportResult(r);
@@ -969,14 +960,14 @@
     ${siteNurseCard()}
     ${SERVER ? serverSecurityCard() : `<div class="card" style="margin-top:12px"><h2>資訊安全</h2>
       <div class="small" style="display:grid;grid-template-columns:auto 1fr;gap:4px 12px">
-        <span class="muted">資料保護</span><span>${db.demo ? '示範資料（虛構，未加密）' : vaultKey ? `✓ 已加密：AES-256-GCM，金鑰由通行密語經 PBKDF2-SHA256 ${window.Vault.ITER.toLocaleString()} 次衍生` : '<span class="overdue">未加密</span>'}</span>
-        <span class="muted">自動鎖定</span><span>閒置 ${IDLE_MIN} 分鐘；輸入錯誤 3 次後延遲重試</span>
+        <span class="muted">登入</span><span>帳號密碼（帳號 ${esc((authRec() || {}).user || DEFAULT_ACCOUNT)}${authRec() ? '' : '，預設密碼'}）；閒置 ${IDLE_MIN} 分鐘自動登出；輸入錯誤 3 次後延遲重試</span>
+        <span class="muted">資料保存</span><span>${db.demo ? '示範資料（虛構）' : '<span class="overdue">未加密</span>：以明文存在這台電腦的瀏覽器，能使用這台電腦的人可從瀏覽器開發工具直接讀取'}</span>
         <span class="muted">外部連線</span><span>無：不載入任何外部程式或字型，內容安全政策（CSP）禁止對外連線</span>
         <span class="muted">稽核紀錄</span><span>${(db.audit || []).length} 筆（含解鎖、查看完整身分證號、匯出、匯入、還原、清除）</span>
       </div>
-      ${vaultKey ? '<div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="chg-pass">變更通行密語</button><button class="btn sm" type="button" id="audit-exp">匯出稽核紀錄</button></div>' : ''}
+      <div class="row" style="margin-top:8px"><button class="btn sm" type="button" id="chg-login">變更帳號密碼</button><button class="btn sm" type="button" id="audit-exp">匯出稽核紀錄</button></div>
       ${(db.audit || []).length ? `<details style="margin-top:8px"><summary class="small">最近 100 筆稽核紀錄</summary><div class="tbl-wrap"><table class="small"><thead><tr><th>時間</th><th>操作者</th><th>動作</th><th>內容</th></tr></thead><tbody>${db.audit.slice(-100).reverse().map((a) => `<tr><td class="tnum">${fmtDT(a.at)}</td><td>${esc(a.user)}</td><td>${esc(a.action)}</td><td>${esc(a.detail)}</td></tr>`).join('')}</tbody></table></div></details>` : ''}
-      <p class="small muted">「操作者」目前為自行選擇，稽核紀錄存在本機加密資料內，無法防止有密語者竄改。多人共用請改用院內主機版（見 server/DEPLOY.md）。</p></div>`}
+      <p class="small muted">「操作者」目前為自行選擇，稽核紀錄存在本機資料內，無法防止竄改。含真實個資、多人共用時，請改用院內主機版（資料加密、個人帳號、稽核紀錄防竄改，見 server/DEPLOY.md）。</p></div>`}
     <div class="card" style="margin-top:12px"><h2>健康888 定義</h2>
       <div class="form-grid">
         <label class="f">觀察期（天，0 為全部）<input type="number" min="0" data-t888="lookbackDays" value="${t8.lookbackDays}"></label>
@@ -997,85 +988,123 @@
     </div>`;
   }
 
-  // ───────────── 資安：通行密語、鎖定、自動登出 ─────────────
+  // ───────────── 單機版登入：帳號密碼、自動登出 ─────────────
   const LOCK_KEY = 'chc-tracking-lock';
+  const AUTH_KEY = 'chc-tracking-auth';       // 變更後的帳號與密碼雜湊（PBKDF2-SHA256，不存明碼）
+  const SESSION_KEY = 'chc-tracking-session'; // 本分頁的登入狀態（關閉分頁即失效）
+  const DEFAULT_ACCOUNT = 'D7500';            // 預設帳號與密碼（院內指定）；可在「分層規則與設定」變更
   const IDLE_MIN = 15;
   function lockState() { try { return JSON.parse(localStorage.getItem(LOCK_KEY)) || { fails: 0, until: 0 }; } catch (e) { return { fails: 0, until: 0 }; } }
   function setLockState(x) { try { localStorage.setItem(LOCK_KEY, JSON.stringify(x)); } catch (e) { /* 忽略 */ } }
-
-  // 設定（或變更）通行密語；回傳 true 表示完成
-  function passphraseDialog(title, why) {
-    return new Promise((resolve) => {
-      dialog(title, `<p class="small">${esc(why || '')}</p>
-        <p class="small">資料會以 AES-256-GCM 加密存在這台電腦；金鑰由通行密語衍生（PBKDF2-SHA256 ${window.Vault.ITER.toLocaleString()} 次），只存在記憶體。<strong>遺失通行密語即無法還原資料</strong>，請由單位主管另行密封保管。</p>
-        <label class="f">通行密語（至少 ${window.Vault.MIN_LEN} 字，建議用一句好記的話）<input type="password" name="p1" autocomplete="new-password" required></label>
-        <label class="f" style="margin-top:8px">再輸入一次<input type="password" name="p2" autocomplete="new-password" required></label>`,
-      [{ label: '取消', onClick: () => { resolve(false); } }, { label: '設定並加密', primary: true, onClick: () => {
-        const fd = new FormData($('#dlg-form')); const a = fd.get('p1'), b = fd.get('p2');
-        window.Vault.checkPassphrase(a);
-        if (a !== b) throw new Error('兩次輸入不一致');
-        const btn = $('#dlg-foot .btn.primary'); btn.disabled = true; btn.textContent = '加密中…';
-        window.Vault.createKey(a).then((k) => { vaultKey = k; audit('設定通行密語', '資料改以新金鑰加密'); save(); resolve(true); $('#dlg').close(); })
-          .catch((e) => { toast(e.message); btn.disabled = false; btn.textContent = '設定並加密'; });
-        return false; // 金鑰衍生完成後才關閉對話框
-      } }]);
-      $('#dlg').addEventListener('close', () => setTimeout(() => resolve(!!vaultKey), 0), { once: true });
-    });
+  function authRec() { try { return JSON.parse(localStorage.getItem(AUTH_KEY)) || null; } catch (e) { return null; } }
+  const b64e = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const b64d = (str) => Uint8Array.from(atob(str), (c) => c.charCodeAt(0));
+  async function pwHash(user, pw, salt, iter) {
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(user + '\n' + pw), 'PBKDF2', false, ['deriveBits']);
+    return b64e(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: b64d(salt), iterations: iter }, base, 256));
   }
-  let asking = null;
-  function requirePassphrase() {
-    if (!asking) asking = passphraseDialog('設定通行密語', '目前資料含個人資料，必須加密後才能存在瀏覽器。').then((ok) => { asking = null; return ok; });
-    return asking;
+  async function checkLogin(user, pw) {
+    const a = authRec();
+    if (!a) return user === DEFAULT_ACCOUNT && pw === DEFAULT_ACCOUNT;
+    return a.user === user && (await pwHash(user, pw, a.salt, a.iter)) === a.hash;
   }
+  async function setLogin(user, pw) {
+    const salt = b64e(crypto.getRandomValues(new Uint8Array(16))), iter = 200000;
+    localStorage.setItem(AUTH_KEY, JSON.stringify({ user, salt, iter, hash: await pwHash(user, pw, salt, iter) }));
+  }
+  function sessionOk() {
+    try { const x = JSON.parse(sessionStorage.getItem(SESSION_KEY)); return !!x && Date.now() - x.last < IDLE_MIN * 60000; } catch (e) { return false; }
+  }
+  function touchSession() { try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ last: Date.now() })); } catch (e) { /* 忽略 */ } }
 
-  // 啟動時資料已加密：顯示鎖定畫面
-  function unlockScreen(envelope) {
+  // 登入畫面（單機版）
+  function localLoginScreen(msg0) {
     return new Promise((resolve) => {
       $('#tabs').innerHTML = ''; $('.top-tools').hidden = true;
       const draw = (msg) => {
         const st = lockState(), wait = Math.max(0, Math.ceil((st.until - Date.now()) / 1000));
-        $('#app').innerHTML = `<div class="card" style="max-width:440px;margin:40px auto">
-          <h1>資料已加密鎖定</h1><p class="small">請輸入通行密語。閒置 ${IDLE_MIN} 分鐘會自動鎖定。</p>
-          <form id="unlock-form"><label class="f">通行密語<input type="password" id="unlock-p" autocomplete="current-password" ${wait ? 'disabled' : ''} autofocus></label>
-          <div class="row" style="margin-top:10px"><button class="btn primary" id="unlock-btn" ${wait ? 'disabled' : ''}>解鎖</button></div></form>
-          ${msg ? `<p class="small overdue">${esc(msg)}</p>` : ''}${wait ? `<p class="small overdue">多次輸入錯誤，請 ${wait} 秒後再試。</p>` : ''}
-          <details class="small" style="margin-top:16px"><summary>忘記通行密語</summary><p>無法還原（沒有後門）。只能清除這台電腦上的加密資料，再從加密備份或原始名冊重新匯入。</p><button class="btn danger sm" type="button" id="forget-btn">清除本機加密資料</button></details></div>`;
+        $('#app').innerHTML = `<div class="card" style="max-width:420px;margin:40px auto">
+          <h1>登入</h1><p class="small">請輸入帳號與密碼。閒置 ${IDLE_MIN} 分鐘會自動登出。</p>
+          <form id="local-login"><label class="f">帳號<input type="text" id="ll-u" autocomplete="username" ${wait ? 'disabled' : ''} autofocus></label>
+          <label class="f" style="margin-top:8px">密碼<input type="password" id="ll-p" autocomplete="current-password" ${wait ? 'disabled' : ''}></label>
+          <div class="row" style="margin-top:10px"><button class="btn primary" id="ll-btn" ${wait ? 'disabled' : ''}>登入</button></div></form>
+          ${msg ? `<p class="small overdue">${esc(msg)}</p>` : ''}${wait ? `<p class="small overdue">多次輸入錯誤，請 ${wait} 秒後再試。</p>` : ''}</div>`;
         if (wait) setTimeout(() => draw(), Math.min(wait, 5) * 1000);
         const go = async () => {
-          const pw = $('#unlock-p').value; if (!pw) return;
-          $('#unlock-btn').disabled = true; $('#unlock-btn').textContent = '驗證中…';
-          try {
-            const r = await window.Vault.open(envelope, pw);
-            setLockState({ fails: 0, until: 0 });
-            vaultKey = r.k; db = r.data; $('.top-tools').hidden = false;
-            audit('解鎖', ''); resolve();
-          } catch (e) {
+          const u = $('#ll-u').value.trim(), pw = $('#ll-p').value; if (!u || !pw) return;
+          $('#ll-btn').disabled = true;
+          if (await checkLogin(u, pw)) {
+            setLockState({ fails: 0, until: 0 }); touchSession(); loggedIn = true; $('.top-tools').hidden = false; resolve(u);
+          } else {
             const st2 = lockState(); st2.fails = (st2.fails || 0) + 1;
             if (st2.fails >= 3) st2.until = Date.now() + Math.min(900, 15 * Math.pow(2, st2.fails - 3)) * 1000;
-            setLockState(st2); draw(e.message);
+            setLockState(st2); draw('帳號或密碼錯誤');
           }
         };
-        $('#unlock-btn').onclick = go;
-        $('#forget-btn').onclick = () => { if (prompt('此動作會永久刪除本機的加密資料。請輸入「清除」確認') !== '清除') return; localStorage.removeItem(KEY); setLockState({ fails: 0, until: 0 }); location.reload(); };
-        const inp = $('#unlock-p'); if (inp && !wait) inp.focus();
+        $('#ll-btn').onclick = go;
+        const inp = $('#ll-u'); if (inp && !wait) inp.focus();
+      };
+      draw(msg0);
+    });
+  }
+
+  // 舊版以通行密語加密的資料：輸入一次舊密語，轉成明文保存（之後只需帳號密碼）
+  function convertScreen(envelope) {
+    return new Promise((resolve) => {
+      const draw = (msg) => {
+        $('#app').innerHTML = `<div class="card" style="max-width:480px;margin:40px auto">
+          <h1>轉換舊資料</h1><p class="small">這台電腦上的資料是舊版以通行密語加密的。系統已改為帳號密碼登入、不再加密；請輸入<strong>舊的通行密語</strong>一次，資料會轉成新格式保存，之後不需要再輸入。</p>
+          <form id="cv-form"><label class="f">舊的通行密語<input type="password" id="cv-p" autocomplete="off" autofocus></label>
+          <div class="row" style="margin-top:10px"><button class="btn primary" id="cv-btn">轉換</button></div></form>
+          ${msg ? `<p class="small overdue">${esc(msg)}</p>` : ''}
+          <details class="small" style="margin-top:16px"><summary>忘記舊的通行密語</summary><p>無法還原。只能清除這台電腦上的舊資料，再從名冊與量測檔重新匯入。</p><button class="btn danger sm" type="button" id="cv-wipe">清除本機舊資料</button></details></div>`;
+        $('#cv-btn').onclick = async () => {
+          const pw = $('#cv-p').value; if (!pw) return;
+          $('#cv-btn').disabled = true; $('#cv-btn').textContent = '轉換中…';
+          try { const r = await window.Vault.open(envelope, pw); resolve(r.data); } catch (e) { draw(e.message); }
+        };
+        $('#cv-wipe').onclick = () => { if (prompt('此動作會永久刪除本機的舊資料。請輸入「清除」確認') !== '清除') return; localStorage.removeItem(KEY); resolve(null); };
       };
       draw();
     });
   }
 
-  // 鎖定：清掉記憶體中的金鑰與資料，重新載入頁面
-  function lockNow(reason) {
-    if (!vaultKey) return;
-    audit('鎖定', reason || '手動');
+  // 登出：寫入稽核、清除登入狀態，重新載入頁面
+  function logoutNow(reason) {
+    if (!loggedIn) return;
+    audit('登出', reason || '手動');
     save();
-    saving.then(() => { vaultKey = null; db = null; location.reload(); });
+    saving.then(() => { try { sessionStorage.removeItem(SESSION_KEY); } catch (e) { /* 忽略 */ } loggedIn = false; db = null; location.reload(); });
   }
-  let idleTimer = null;
+  let idleTimer = null, lastTouch = 0;
   function armIdle() {
     clearTimeout(idleTimer);
-    if (vaultKey) idleTimer = setTimeout(() => lockNow(`閒置 ${IDLE_MIN} 分鐘自動鎖定`), IDLE_MIN * 60000);
+    if (!loggedIn) return;
+    if (Date.now() - lastTouch > 30000) { lastTouch = Date.now(); touchSession(); }
+    idleTimer = setTimeout(() => logoutNow(`閒置 ${IDLE_MIN} 分鐘自動登出`), IDLE_MIN * 60000);
   }
-  ['mousemove', 'keydown', 'click', 'touchstart', 'scroll'].forEach((ev) => document.addEventListener(ev, () => { if (vaultKey) armIdle(); }, { passive: true, capture: true }));
+  ['mousemove', 'keydown', 'click', 'touchstart', 'scroll'].forEach((ev) => document.addEventListener(ev, () => { if (loggedIn) armIdle(); }, { passive: true, capture: true }));
+
+  // 變更帳號密碼
+  function changeLoginDialog() {
+    dialog('變更帳號密碼', `<p class="small">變更後，這台電腦上的登入都改用新的帳號密碼（只存雜湊，不存明碼）。</p>
+      <label class="f">目前密碼<input type="password" name="old" autocomplete="current-password" required></label>
+      <label class="f" style="margin-top:8px">新帳號<input type="text" name="u" autocomplete="username" value="${esc((authRec() || {}).user || DEFAULT_ACCOUNT)}" required></label>
+      <label class="f" style="margin-top:8px">新密碼（至少 5 字元，建議 12 字元以上）<input type="password" name="p1" autocomplete="new-password" required></label>
+      <label class="f" style="margin-top:8px">再輸入一次<input type="password" name="p2" autocomplete="new-password" required></label>`,
+    [{ label: '取消' }, { label: '變更', primary: true, onClick: () => {
+      const fd = new FormData($('#dlg-form')); const u = String(fd.get('u') || '').trim(), a = fd.get('p1'), b = fd.get('p2');
+      if (!u) throw new Error('請輸入帳號');
+      if (!a || a.length < 5) throw new Error('新密碼至少 5 字元');
+      if (a !== b) throw new Error('兩次輸入不一致');
+      const cur = (authRec() || {}).user || DEFAULT_ACCOUNT;
+      checkLogin(cur, fd.get('old')).then(async (ok) => {
+        if (!ok) { toast('目前密碼錯誤'); return; }
+        await setLogin(u, a); audit('變更帳號密碼', `帳號 ${u}`); save(); $('#dlg').close(); render(); toast('已變更帳號密碼');
+      });
+      return false;
+    } }]);
+  }
 
   // ───────────── 伺服器模式：登入與啟動 ─────────────
   async function detectServer() {
@@ -1141,9 +1170,12 @@
       SERVER = { user: me.user, csrf: me.csrf };
       return me.user.mustChange ? changePasswordScreen() : enterServerApp();
     }
+    let who = null;
+    if (sessionOk()) { loggedIn = true; touchSession(); } else who = await localLoginScreen();
     const raw = load();
-    if (raw && window.Vault.isEnvelope(raw)) await unlockScreen(raw);
-    else db = raw;
+    let converted = false;
+    if (raw && window.Vault.isEnvelope(raw)) { db = await convertScreen(raw); converted = !!db; } else db = raw;
+    $('.top-tools').hidden = false;
   // 示範資料是以舊規則產生的：直接依新規則重新產生（保留設定）
   if (db && db.demo && (db.rulesVersion !== E.RULES_VERSION || db.schema !== E.SCHEMA || db.demoV !== 2)) { const keep = db.settings; db = window.Demo.generate(new Date()); if (keep) db.settings = Object.assign(db.settings, keep); save(); setTimeout(() => toast('分層規則已更新，示範資料已依新規則重新產生'), 300); }
   if (!db) { db = window.Demo.generate(new Date()); save(); }
@@ -1152,11 +1184,9 @@
   db.settings = db.settings || {};
   // 舊版預設的「個管師」名單換成 8 名社區護理師；使用者自訂的名單不動
   if (!db.settings.nurses || !db.settings.nurses.length || db.settings.nurses.every((n) => /^個管師/.test(n))) db.settings.nurses = DEFAULT_NURSES.slice();
-    // 舊版留下的明文正式資料：要求立即設定通行密語加密
-    if (sensitive() && !vaultKey) {
-      render();
-      while (!(await requirePassphrase())) { /* 必須設定才可繼續使用 */ }
-    }
+    if (who) audit('登入', who);
+    if (converted) audit('舊資料轉換', '由通行密語加密改為帳號密碼登入、明文保存');
+    save();
     render();
     armIdle();
   }
@@ -1244,9 +1274,7 @@
         $('#roster-go').onclick = async () => {
           if (SERVER) { srv(api('roster', { persons: pendingRoster.all }), (j) => { pendingRoster = null; return `已新增 ${j.result.add} 位、更新 ${j.result.upd} 位${j.result.denied ? `；${j.result.denied} 位不在你負責的據點，未匯入` : ''}`; }); return; }
           if (db.demo && !confirm('匯入正式名冊會清除示範資料，確定？')) return;
-          const fresh = !vaultKey;
-          if (fresh && !(await passphraseDialog('設定通行密語', '名冊含姓名、身分證號與電話，匯入前必須設定通行密語加密。'))) return;
-          commitRoster(fresh);
+          commitRoster();
         };
         $('#roster-issues').onclick = () => exportCsv('名冊問題清單.csv', [['工作表', '列', '姓名', '問題'], ...pendingRoster.issues.map((i) => [i.sheet, i.row, i.name, i.issues.join('；')])], '名冊問題清單');
       }).catch((err) => toast(err.message)); };
@@ -1258,34 +1286,30 @@
       const mc = $('#meas-create'); if (mc) mc.onchange = () => { if (pendingMeas) previewMeasurements().catch((err) => toast(err.message)); };
       $('#tpl').onclick = () => download('量測匯入範本.csv', csv([M_COLS.map((c) => c[0]), [db.persons[0] ? (db.persons[0].demoId || '請填身分證號') : 'A123456789', '2026-10-30 09:15', 138, 86, 78, '', 96, 36.5, 112, '空腹', 135, 160, 48, '', '', 62.5, 86, 31.2, '']]), 'text/csv');
       if (SERVER) return;
-      // 備份：正式資料一律加密匯出（用目前的通行密語）；示範資料為明文
-      $('#bk-exp').onclick = async () => {
-        const name = `健康站追蹤備份_${fmtD(nowISO()).replace(/\//g, '')}${sensitive() ? '_加密' : ''}.json`;
-        if (sensitive()) {
-          if (!vaultKey) { toast('請先設定通行密語'); return; }
-          audit('匯出加密備份', name); save();
-          download(name, JSON.stringify(await window.Vault.seal(vaultKey, db, 'chc-backup')), 'application/json');
-        } else download(name, JSON.stringify(db), 'application/json');
+      // 備份：明文 JSON（含個資時先提醒妥善保管）
+      $('#bk-exp').onclick = () => {
+        const name = `健康站追蹤備份_${fmtD(nowISO()).replace(/\//g, '')}.json`;
+        if (sensitive() && !confirm('備份檔未加密，含姓名、身分證號與健康資料。請只存放在院內受管控的位置，不要寄送或上傳到雲端。繼續匯出？')) return;
+        audit('匯出備份', name); save();
+        download(name, JSON.stringify(db), 'application/json');
       };
       $('#bk-imp').onchange = (e) => {
         const f = e.target.files[0]; if (!f) return;
         if (f.size > 50 * 1024 * 1024) { toast('備份檔過大'); return; }
         f.text().then(async (t) => {
-          let d = JSON.parse(t), k = null;
-          if (window.Vault.isEnvelope(d)) {
-            const pw = prompt('這是加密備份，請輸入當時的通行密語'); if (!pw) return;
-            const r = await window.Vault.open(d, pw, 'chc-backup'); d = r.data; k = r.k;
+          let d = JSON.parse(t);
+          if (window.Vault.isEnvelope(d)) { // 舊版加密備份
+            const pw = prompt('這是舊版加密備份，請輸入當時的通行密語'); if (!pw) return;
+            d = (await window.Vault.open(d, pw, 'chc-backup')).data;
           }
           E.validateBackup(d);
           if (!confirm(`以備份覆蓋目前資料？（${d.persons.length} 位民眾、${d.episodes.length} 個追蹤輪次）`)) return;
           db = d;
-          if (!db.demo && !vaultKey) vaultKey = k;
-          if (sensitive() && !vaultKey && !(await passphraseDialog('設定通行密語', '還原的資料含個人資料，必須加密儲存。'))) { location.reload(); return; }
           if (!db.demo && db.schema !== E.SCHEMA) E.migrateWorkflow(db);
           audit('還原備份', f.name); save(); render(); toast('已還原備份');
         }).catch((err) => toast(err.message));
       };
-      $('#demo-load').onclick = () => { if (!confirm('以示範資料覆蓋目前所有資料？（加密的正式資料會被刪除，請先匯出加密備份）')) return; db = window.Demo.generate(new Date()); vaultKey = null; save(); render(); };
+      $('#demo-load').onclick = () => { if (!confirm('以示範資料覆蓋目前所有資料？（正式資料會被刪除，請先匯出備份）')) return; db = window.Demo.generate(new Date()); save(); render(); };
       $('#wipe').onclick = () => { if (!confirm('清除全部資料（無法復原）？建議先匯出備份。')) return; audit('清除全部資料', ''); db = { persons: [], measurements: [], episodes: [], audit: db.audit, settings: db.settings, rulesVersion: E.RULES_VERSION, schema: E.SCHEMA }; save(); render(); };
     },
     888() {
@@ -1311,7 +1335,7 @@
       $('#mask').onchange = (e) => { ui.mask = e.target.checked; render(); };
       bindSiteNurse();
       if (SERVER) { bindServerSecurity(); return; }
-      const cp = $('#chg-pass'); if (cp) cp.onclick = async () => { if (await passphraseDialog('變更通行密語', '設定新密語後，資料會立即以新金鑰重新加密；舊的加密備份仍需用舊密語開啟。')) { audit('變更通行密語', ''); save(); render(); toast('已變更通行密語'); } };
+      const cl = $('#chg-login'); if (cl) cl.onclick = changeLoginDialog;
       const ae = $('#audit-exp'); if (ae) ae.onclick = () => exportCsv('稽核紀錄.csv', [['時間', '操作者', '動作', '內容'], ...(db.audit || []).map((a) => [a.at, a.user, a.action, a.detail])], '稽核紀錄');
     },
   };
@@ -1329,7 +1353,7 @@
   });
   $('#site-filter').onchange = (e) => { ui.site = e.target.value; render(); };
   $('#user-sel').onchange = (e) => { ui.user = e.target.value; saveUI(); };
-  $('#lock-btn').onclick = () => (SERVER ? api('logout', {}).finally(() => location.reload()) : lockNow('手動鎖定'));
+  $('#lock-btn').onclick = () => (SERVER ? api('logout', {}).finally(() => location.reload()) : logoutNow('手動登出'));
   $('#theme-btn').onclick = () => {
     const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
     document.documentElement.dataset.theme = cur === 'dark' ? 'light' : 'dark'; ui.theme = document.documentElement.dataset.theme; saveUI(); themeLabel();

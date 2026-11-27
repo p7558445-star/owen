@@ -89,6 +89,7 @@
     sessionMinutes: 60,
   };
 
+  const NOVISIT_REASONS = ['已預約、尚未看診', '民眾拒絕就醫', '聯絡不上', '其他'];
   const CLOSE_REASONS = ['達標回例行量測', '已轉由醫師持續管理', '死亡', '遷出', '失聯', '拒絕'];
 
   // ───────────────────────── 小工具 ─────────────────────────
@@ -908,6 +909,16 @@
         ep.nextDue = nextDueOf(ep, sla, p.visitDate, at);
         log(ep, at, 'confirmed', (needVisit ? `確認就醫：${p.visitDate} ${p.facility || ''} ${p.result || ''}`.trim() : '確認完成健康處方／衛教') + `｜下次複測：${ep.nextDue.slice(0, 10)}`, by); break;
       }
+      case 'novisit': { // 橙／紅層：民眾尚未就醫，仍完成本輪進入「確認」，依一般規則排複測（品質指標不算就醫確認）
+        if (ep.state !== 'intervened') throw new Error('需先完成介入');
+        if (ep.upgradeNotice && !ep.upgradeNotice.done) throw new Error(`本輪已升級為${LEVEL_LABEL[ep.level]}層，請先補通知`);
+        if (RANK[ep.level] < 2) throw new Error('黃層不需就醫，請用「確認完成健康處方」');
+        const reason = NOVISIT_REASONS.includes(p.reason) ? p.reason : NOVISIT_REASONS[0];
+        ep.confirm = { at, by, type: 'noVisit', visitDate: null, facility: '', reason, result: p.result || '' };
+        ep.state = 'confirmed';
+        ep.nextDue = nextDueOf(ep, sla, null, at);
+        log(ep, at, 'confirmed', `確認：尚未就醫（${reason}${p.result ? '：' + p.result : ''}）｜下次複測：${ep.nextDue.slice(0, 10)}`, by); break;
+      }
       case 'close': // 非臨床結案：死亡、遷出、失聯、拒絕；或已轉由醫師持續管理（需回診日期）
         if (!CLOSE_REASONS.includes(p.reason) || p.reason === '達標回例行量測') throw new Error('結案原因限：已轉由醫師持續管理、死亡、遷出、失聯、拒絕');
         if (p.reason === '已轉由醫師持續管理' && !p.followupDate) throw new Error('轉由醫師持續管理需登記回診日期');
@@ -1549,7 +1560,7 @@
   }
 
   const Engine = {
-    LEVELS, RANK, LEVEL_LABEL, LEVEL_MEANING, ITEMS, ITEM_LABEL, SYMPTOMS, SYMPTOM_BY_LABEL, ASSUMPTIONS, DEFAULT_SLA, CLOSE_REASONS,
+    LEVELS, RANK, LEVEL_LABEL, LEVEL_MEANING, ITEMS, ITEM_LABEL, SYMPTOMS, SYMPTOM_BY_LABEL, ASSUMPTIONS, DEFAULT_SLA, CLOSE_REASONS, NOVISIT_REASONS,
     STATES, OPEN_STATES, STATE_LABEL, isOpen, recheckOverdue, SCHEMA, migrateWorkflow, GLU_TYPE, RX, DEFAULT_888, ENTRY_888, settings888, COUNSEL_TOPICS, COUNSEL_METHODS, validCounsel, counselText, DOWNGRADE_888, KEYS_888, cascade888,
     LIFESTYLE, lifestylePrescription, restartClock, SMOOTH, AVG_DAYS, AUTO_CLOSE, vitalKeys, stepDown, bpOf, sessionValue, evalAt, evaluateTimeline, expirePending, autoClose, DEFAULT_SITE_ALIASES, normalizeSite, parseSiteNurseSheet, applySiteNurses, RANGES, validateMeasurement, validateBackup, mergeRoster, importMeasurementRows, IMPORT_ALIAS, RULES_VERSION, REGRADE_CLOSE, regradeOpen,
     maxLevel, evaluateSession, groupSessions, ingest, act, nextStep, quality, wilson, prescription,

@@ -541,6 +541,26 @@ t('step-down: blocked by any orange 7-day mean, by red, by non-vital items, or a
   assert.equal(e4.level, 'orange', 'only one week covered');
 });
 
+// ── 尚未就醫也可進入確認
+t('orange/red: "not yet visited" completes the round, schedules re-check, not counted as visit-confirmed', () => {
+  const db = db0();
+  const { episode: ep } = add2(db, D(1), { sbp: 165, dbp: 85 });
+  E.act(db, ep.id, 'notify', {}, D(2)); E.act(db, ep.id, 'intervene', { rx: 'x' }, D(3));
+  E.act(db, ep.id, 'novisit', { reason: '民眾拒絕就醫', result: '3 次勸說' }, D(10), '護理師');
+  assert.equal(ep.state, 'confirmed'); assert.equal(ep.confirm.type, 'noVisit'); assert.equal(ep.confirm.reason, '民眾拒絕就醫');
+  assert.ok(ep.nextDue); assert.ok(ep.log[ep.log.length - 1].text.startsWith('確認：尚未就醫（民眾拒絕就醫：3 次勸說）'));
+  const q = E.quality(db, D(60), null);
+  assert.equal(q.orangeConfirm.n, 1); assert.equal(q.orangeConfirm.k, 0);
+  const db2 = db0(); const { episode: e2 } = add2(db2, D(1), { sbp: 145, dbp: 80 });
+  E.act(db2, e2.id, 'notify', {}, D(2)); E.act(db2, e2.id, 'intervene', { rx: 'x' }, D(3));
+  assert.throws(() => E.act(db2, e2.id, 'novisit', {}, D(4)), /黃層不需就醫/);
+  const db3 = db0(); const { episode: e3 } = add2(db3, D(1), { sbp: 165, dbp: 85 });
+  assert.throws(() => E.act(db3, e3.id, 'novisit', {}, D(2)), /需先完成介入/);
+  const db4 = db0(); const { episode: e4 } = add(db4, D(1), { sbp: 185, dbp: 112 });
+  E.act(db4, e4.id, 'notify', {}, D(1, 10)); E.act(db4, e4.id, 'intervene', { rx: 'x' }, D(1, 11)); E.act(db4, e4.id, 'novisit', { reason: 'bogus' }, D(2));
+  assert.equal(e4.confirm.reason, '已預約、尚未看診', 'unknown reason falls back'); assert.equal(e4.nextDue.slice(0, 10), new Date(2026, 0, 16, 23, 59).toISOString().slice(0, 10), 'red: 2 weeks from today');
+});
+
 // ── 健康888 要介入：已介入且有結構化生活型態諮詢紀錄
 const COUNSEL = { topics: ['salt', 'exercise'], method: '面談', minutes: '15' };
 t('888 intervene default: intervened AND a complete structured counseling record', () => {

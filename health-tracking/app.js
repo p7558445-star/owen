@@ -523,6 +523,7 @@
       const s = E.nextStep(last, now);
       return `<div class="card" style="border-left:4px solid var(--lv-${last.level})">
         <div class="row spread"><h2 style="margin:0">${lv(last.level)} 第 ${last.cycle} 輪已完成</h2><span class="small muted">確認於 ${fmtD(last.confirm && last.confirm.at)}</span></div>
+        ${last.confirm && last.confirm.type === 'noVisit' ? `<p class="small" style="margin:6px 0 0"><span class="tag warn">尚未就醫</span> ${esc(last.confirm.reason || '')}${last.confirm.result ? '：' + esc(last.confirm.result) : ''}。請持續關心就醫情形，並於複測日請民眾回站。</p>` : ''}
         ${stepper('confirmed')}
         <div class="grid g2" style="margin-top:10px"><div><h3>下一步：${esc(s.label)}</h3><div class="small">${dueText(s)}</div></div>
         <p class="small muted" style="margin:0">民眾回站量測後，系統自動判斷：升高立即開始下一輪；複測日後仍異常則開始下一輪（最近 2 次量測取較高者）；連續 2 次綠層則回到例行量測。</p></div>
@@ -552,7 +553,9 @@
       case 'intervened':
         form = needVisit ? `<div class="form-grid"><label class="f">就醫日期<input type="date" name="visitDate" required></label><label class="f">就醫院所／科別<input type="text" name="facility" placeholder="彰基家醫科"></label></div>
           <label class="f" style="margin-top:8px">就醫結果<input type="text" name="result" placeholder="例：開始用藥、安排心電圖"></label>
-          <button class="btn primary" style="margin-top:10px" data-act="confirm">確認已就醫</button>`
+          <div class="row" style="margin-top:10px;align-items:flex-end"><button class="btn primary" data-act="confirm">確認已就醫</button>
+            <button class="btn" data-act="novisit" title="民眾尚未就醫：仍完成本輪、進入確認並排定複測；品質指標不算就醫確認">尚未就醫</button>
+            <label class="f" style="margin:0">尚未就醫原因<select name="reason">${E.NOVISIT_REASONS.map((r) => `<option>${r}</option>`).join('')}</select></label></div>`
           : `<p class="small">黃層：確認民眾已收到並理解健康處方（衛教完成）。</p><label class="f">備註<input type="text" name="result"></label><button class="btn primary" style="margin-top:10px" data-act="confirm">確認完成健康處方</button>`; break;
     }
     const dueRows = [['通知', ep.due.notify, ep.notify && ep.notify.at], ['介入（健康處方）', ep.due.intervene, ep.intervene && ep.intervene.at], [needVisit ? '確認就醫' : '確認處方', ep.due.confirm, ep.confirm && ep.confirm.at]];
@@ -1240,6 +1243,7 @@
       $$('[data-print-rn]').forEach((b) => (b.onclick = (e) => { e.preventDefault(); const ta = $('#ep-form textarea[name=rnRx]'); printRx(p, Object.assign({}, ep, { rx: { text: ta.value } })); }));
       $$('[data-act]').forEach((b) => (b.onclick = () => {
         const fd = new FormData($('#ep-form')); let payload = Object.fromEntries(fd.entries());
+        if (b.dataset.act === 'novisit' && !confirm(`記錄為「尚未就醫（${payload.reason}）」並進入下一步？`)) return;
         if (b.dataset.act === 'renotify') payload = { method: payload.rnMethod, note: payload.rnNote, rx: payload.rnRx };
         if (b.dataset.act === 'intervene') { const c = counselFrom(fd); for (const k of ['cTopic', 'cMethod', 'cMin']) delete payload[k]; if (c) payload.counsel = c; }
         if (SERVER) { srv(api(`episodes/${ep.id}/act`, { action: b.dataset.act, payload }), () => (b.dataset.act === 'renotify' ? (payload.rx ? '已記錄：補通知、重開處方' : '已記錄：補通知') : `已記錄：${E.STATE_LABEL[(db.episodes.find((x) => x.id === ep.id) || {}).state] || '完成'}`)); return; }
